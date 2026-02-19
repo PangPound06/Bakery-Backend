@@ -1,14 +1,14 @@
 package com.app.my_project.controller;
 
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import jakarta.annotation.PostConstruct;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -18,10 +18,27 @@ import java.util.UUID;
 @CrossOrigin(origins = "*")
 public class SlipController {
 
-    // โฟลเดอร์เก็บสลิป
-    private static final String UPLOAD_DIR = "my-project/src/main/resources/static/uploads/slips/";
+    @Value("${cloudinary.cloud-name}")
+    private String cloudName;
 
-    // อัพโหลดสลิปการโอนเงิน
+    @Value("${cloudinary.api-key}")
+    private String apiKey;
+
+    @Value("${cloudinary.api-secret}")
+    private String apiSecret;
+
+    private Cloudinary cloudinary;
+
+    @PostConstruct
+    public void init() {
+        cloudinary = new Cloudinary(ObjectUtils.asMap(
+            "cloud_name", cloudName,
+            "api_key", apiKey,
+            "api_secret", apiSecret
+        ));
+    }
+
+    // อัพโหลดสลิปไป Cloudinary
     @PostMapping("/upload")
     public ResponseEntity<?> uploadSlip(@RequestParam("file") MultipartFile file) {
         Map<String, Object> response = new HashMap<>();
@@ -34,7 +51,7 @@ public class SlipController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // ตรวจสอบประเภทไฟล์ (รับเฉพาะรูปภาพ)
+            // ตรวจสอบประเภทไฟล์
             String contentType = file.getContentType();
             if (contentType == null || !contentType.startsWith("image/")) {
                 response.put("success", false);
@@ -49,60 +66,31 @@ public class SlipController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // สร้างโฟลเดอร์ถ้ายังไม่มี
-            File uploadDir = new File(UPLOAD_DIR);
-            if (!uploadDir.exists()) {
-                uploadDir.mkdirs();
-            }
+            // อัพโหลดไป Cloudinary
+            String publicId = "slips/slip_" + UUID.randomUUID().toString();
 
-            // สร้างชื่อไฟล์ใหม่ (ป้องกันชื่อซ้ำ)
-            String originalFilename = file.getOriginalFilename();
-            String extension = "";
-            if (originalFilename != null && originalFilename.contains(".")) {
-                extension = originalFilename.substring(originalFilename.lastIndexOf("."));
-            }
-            String newFilename = "slip_" + UUID.randomUUID().toString() + extension;
+            @SuppressWarnings("unchecked")
+            Map<String, Object> uploadResult = cloudinary.uploader().upload(file.getBytes(), ObjectUtils.asMap(
+                "public_id", publicId,
+                "folder", "bakery",
+                "resource_type", "image"
+            ));
 
-            // บันทึกไฟล์
-            Path filePath = Paths.get(UPLOAD_DIR + newFilename);
-            Files.write(filePath, file.getBytes());
+            String secureUrl = (String) uploadResult.get("secure_url");
 
-            System.out.println("✅ Slip uploaded: " + newFilename);
+            System.out.println("✅ Slip uploaded to Cloudinary: " + secureUrl);
 
             response.put("success", true);
             response.put("message", "อัพโหลดสลิปสำเร็จ");
-            response.put("filename", newFilename);
-            response.put("path", "/uploads/slips/" + newFilename);
+            response.put("path", secureUrl);
 
             return ResponseEntity.ok(response);
 
-        } catch (IOException e) {
+        } catch (Exception e) {
             e.printStackTrace();
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาดในการอัพโหลด: " + e.getMessage());
             return ResponseEntity.badRequest().body(response);
-        }
-    }
-
-    // ดูสลิป (สำหรับ Admin ตรวจสอบ)
-    @GetMapping("/{filename}")
-    public ResponseEntity<?> getSlip(@PathVariable String filename) {
-        try {
-            Path filePath = Paths.get(UPLOAD_DIR + filename);
-            
-            if (!Files.exists(filePath)) {
-                return ResponseEntity.notFound().build();
-            }
-
-            byte[] fileContent = Files.readAllBytes(filePath);
-            String contentType = Files.probeContentType(filePath);
-
-            return ResponseEntity.ok()
-                    .header("Content-Type", contentType != null ? contentType : "image/jpeg")
-                    .body(fileContent);
-
-        } catch (IOException e) {
-            return ResponseEntity.badRequest().build();
         }
     }
 }
