@@ -26,6 +26,7 @@ public class WebConfig implements WebMvcConfigurer {
         };
     }
 
+    /* 
     // กำหนดให้สามารถเข้าถึงไฟล์ใน folder uploads ได้
     // URL: http://localhost:8080/uploads/images/xxx.jpg
 
@@ -39,5 +40,18 @@ public class WebConfig implements WebMvcConfigurer {
         // Serve static resources
         registry.addResourceHandler("/static/**")
                 .addResourceLocations("classpath:/static/");
+    }
+    */
+
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/**")
+                .allowedOrigins(
+                    "https://bakery-frontend-next.vercel.app",
+                    "http://localhost:3000"
+                )
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                .allowedHeaders("*")
+                .allowCredentials(true);
     }
 }
