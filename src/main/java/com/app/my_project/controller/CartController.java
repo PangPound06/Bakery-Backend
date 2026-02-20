@@ -223,9 +223,6 @@ public class CartController {
                 }
             }
 
-            // ลด stock
-            updateProductStock(conn, request.getProductId(), currentStock - quantityToAdd);
-
             return ResponseEntity.ok(java.util.Collections.singletonMap("message", "เพิ่มสินค้าลงตะกร้าเรียบร้อย"));
 
         } catch (Exception e) {
@@ -298,18 +295,6 @@ public class CartController {
                     int newQuantity = request.getQuantity();
                     int quantityDiff = newQuantity - currentQuantity;
 
-                    if (quantityDiff > 0) {
-                        Long currentStock = getProductStock(conn, productId);
-                        if (currentStock < quantityDiff) {
-                            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                                    .body(java.util.Collections.singletonMap("error",
-                                            "สินค้าคงเหลือไม่เพียงพอ (เหลือ " + currentStock + " ชิ้น)"));
-                        }
-                        updateProductStock(conn, productId, currentStock - quantityDiff);
-                    } else if (quantityDiff < 0) {
-                        Long currentStock = getProductStock(conn, productId);
-                        updateProductStock(conn, productId, currentStock + Math.abs(quantityDiff));
-                    }
                 }
             }
 
@@ -355,12 +340,6 @@ public class CartController {
                 }
             }
 
-            // คืน stock
-            if (productId > 0) {
-                Long currentStock = getProductStock(conn, productId);
-                updateProductStock(conn, productId, currentStock + quantity);
-            }
-
             try (PreparedStatement deleteStmt = conn.prepareStatement(
                     "DELETE FROM tb_cart WHERE id = ? AND email = ?")) {
                 deleteStmt.setLong(1, cartId);
@@ -387,17 +366,6 @@ public class CartController {
             try (PreparedStatement selectStmt = conn.prepareStatement(
                     "SELECT product_id, quantity FROM tb_cart WHERE email = ?")) {
                 selectStmt.setString(1, email);
-
-                try (ResultSet rs = selectStmt.executeQuery()) {
-                    while (rs.next()) {
-                        Long productId = rs.getLong("product_id");
-                        int quantity = rs.getInt("quantity");
-                        if (productId > 0) {
-                            Long currentStock = getProductStock(conn, productId);
-                            updateProductStock(conn, productId, currentStock + quantity);
-                        }
-                    }
-                }
             }
 
             try (PreparedStatement deleteStmt = conn.prepareStatement("DELETE FROM tb_cart WHERE email = ?")) {
