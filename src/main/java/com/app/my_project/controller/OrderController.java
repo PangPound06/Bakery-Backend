@@ -245,4 +245,36 @@ public class OrderController {
             return ResponseEntity.badRequest().body(response);
         }
     }
+
+    // ค้นหา Order ด้วย ORD number
+    @GetMapping("/search/{orderId}")
+    public ResponseEntity<?> searchByOrderId(@PathVariable String orderId) {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // แปลง ORD22603774 → 22603774
+            String numericId = orderId.replace("ORD", "").replaceAll("[^0-9]", "");
+            Long id = Long.parseLong(numericId);
+
+            Optional<OrderEntity> orderOpt = orderRepository.findById(id);
+            if (orderOpt.isEmpty()) {
+                response.put("success", false);
+                response.put("message", "ไม่พบคำสั่งซื้อ");
+                return ResponseEntity.ok(response);
+            }
+
+            OrderEntity order = orderOpt.get();
+            List<OrderItemEntity> items = orderItemRepository.findByOrderId(id);
+
+            response.put("success", true);
+            response.put("order", order);
+            response.put("items", items);
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "หมายเลขคำสั่งซื้อไม่ถูกต้อง");
+            return ResponseEntity.ok(response);
+        }
+    }
 }
