@@ -1,69 +1,63 @@
 package com.app.my_project.service;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
+import jakarta.mail.MessagingException;
+import jakarta.mail.internet.MimeMessage;
 
 @Service
 public class EmailService {
 
-    @Value("${resend.api.key}")
-    private String resendApiKey;
+    @Autowired
+    private JavaMailSender mailSender;
 
-    // ⚠️ ข้อควรระวัง: บัญชีฟรีของ Resend จะบังคับให้ใช้ชื่ออีเมลผู้ส่งเป็น onboarding@resend.dev เท่านั้น
-    private final String fromEmail = "My Bakery <onboarding@resend.dev>";
-    private final String resendApiUrl = "https://api.resend.com/emails";
+    @Value("${spring.mail.username}")
+    private String fromEmail;
 
     @Async
     public void sendOtpEmail(String toEmail, String otp) {
-        String subject = "🔐 รหัส OTP สำหรับรีเซ็ตรหัสผ่าน - My Bakery";
-        String htmlContent = buildOtpEmailTemplate(otp);
-        sendEmailViaResend(toEmail, subject, htmlContent);
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+
+            helper.setFrom(fromEmail);
+            helper.setTo(toEmail);
+            helper.setSubject("🔐 รหัส OTP สำหรับรีเซ็ตรหัสผ่าน - My Bakery");
+
+            String htmlContent = buildOtpEmailTemplate(otp);
+            helper.setText(htmlContent, true);
+
+            mailSender.send(message);
+            System.out.println("✅ Sent OTP via Gmail to: " + toEmail);
+        } catch (MessagingException e) {
+            System.err.println("❌ Failed to send OTP email: " + e.getMessage());
+        }
     }
 
     @Async
     public void sendPasswordChangedEmail(String toEmail) {
-        String subject = "✅ รหัสผ่านถูกเปลี่ยนเรียบร้อยแล้ว - My Bakery";
-        String htmlContent = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"></head><body style=\"font-family: Arial, sans-serif; padding: 20px;\"><div style=\"max-width: 500px; margin: 0 auto; background: #fff; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);\"><h1 style=\"color: #f59e0b; text-align: center;\">🧁 My Bakery</h1><div style=\"text-align: center; font-size: 48px; margin: 20px 0;\">✅</div><h2 style=\"text-align: center; color: #333;\">รหัสผ่านถูกเปลี่ยนแล้ว</h2><p style=\"color: #666; text-align: center;\">รหัสผ่านของบัญชีคุณได้ถูกเปลี่ยนเรียบร้อยแล้ว</p><p style=\"color: #ef4444; text-align: center; font-size: 12px;\">หากคุณไม่ได้ทำการเปลี่ยนรหัสผ่าน กรุณาติดต่อเราทันที</p></div></body></html>";
-        sendEmailViaResend(toEmail, subject, htmlContent);
-    }
-
-    // ฟังก์ชันหลักสำหรับยิง API ไปหา Resend
-    private void sendEmailViaResend(String toEmail, String subject, String htmlContent) {
         try {
-            RestTemplate restTemplate = new RestTemplate();
-            
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(resendApiKey);
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 
-            Map<String, Object> body = new HashMap<>();
-            body.put("from", fromEmail);
-            body.put("to", Arrays.asList(toEmail)); 
-            body.put("subject", subject);
-            body.put("html", htmlContent);
+            helper.setFrom(fromEmail);
+            helper.setTo(toEmail);
+            helper.setSubject("✅ รหัสผ่านถูกเปลี่ยนเรียบร้อยแล้ว - My Bakery");
 
-            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-            
-            // ยิงคำสั่ง POST ไปหา Resend
-            ResponseEntity<String> response = restTemplate.postForEntity(resendApiUrl, request, String.class);
-            
-            System.out.println("✅ Sent email via Resend API to: " + toEmail + " | Status: " + response.getStatusCode());
-        } catch (Exception e) {
-            System.err.println("❌ Failed to send email via Resend API: " + e.getMessage());
+            String htmlContent = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"></head><body style=\"font-family: Arial, sans-serif; padding: 20px;\"><div style=\"max-width: 500px; margin: 0 auto; background: #fff; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);\"><h1 style=\"color: #f59e0b; text-align: center;\">🧁 My Bakery</h1><div style=\"text-align: center; font-size: 48px; margin: 20px 0;\">✅</div><h2 style=\"text-align: center; color: #333;\">รหัสผ่านถูกเปลี่ยนแล้ว</h2><p style=\"color: #666; text-align: center;\">รหัสผ่านของบัญชีคุณได้ถูกเปลี่ยนเรียบร้อยแล้ว</p><p style=\"color: #ef4444; text-align: center; font-size: 12px;\">หากคุณไม่ได้ทำการเปลี่ยนรหัสผ่าน กรุณาติดต่อเราทันที</p></div></body></html>";
+
+            helper.setText(htmlContent, true);
+            mailSender.send(message);
+        } catch (MessagingException e) {
+            System.err.println("❌ Failed to send Password Changed email: " + e.getMessage());
         }
     }
 
-    // สร้าง HTML Template สำหรับอีเมล OTP
     private String buildOtpEmailTemplate(String otp) {
         return "<!DOCTYPE html>"
             + "<html>"
