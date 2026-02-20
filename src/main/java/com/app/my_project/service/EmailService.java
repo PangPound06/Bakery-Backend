@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 
+import org.springframework.scheduling.annotation.Async;
+
 @Service
 public class EmailService {
 
@@ -19,7 +21,8 @@ public class EmailService {
     private String fromEmail;
 
     
-     // ส่ง OTP ไปยังอีเมล
+     // ส่ง OTP ไปยังอีเมล (ใส่ @Async เพื่อให้ทำงานเบื้องหลัง ลดปัญหา Connection Leak)
+    @Async
     public void sendOtpEmail(String toEmail, String otp) throws MessagingException {
         MimeMessage message = mailSender.createMimeMessage();
         MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
@@ -83,7 +86,8 @@ public class EmailService {
     }
 
     
-     // ส่งอีเมลแจ้งเตือนว่ารหัสผ่านถูกเปลี่ยนแล้ว
+     // ส่งอีเมลแจ้งเตือนว่ารหัสผ่านถูกเปลี่ยนแล้ว (ใส่ @Async เพื่อให้ทำงานเบื้องหลัง)
+    @Async
     public void sendPasswordChangedEmail(String toEmail) throws MessagingException {
         MimeMessage message = mailSender.createMimeMessage();
         MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
