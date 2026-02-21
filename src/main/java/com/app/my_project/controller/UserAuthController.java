@@ -44,6 +44,9 @@ public class UserAuthController {
     @Autowired
     private BCryptPasswordEncoder passwordEncoder;
 
+    @Autowired
+    private UserProfileRepository userProfileRepository;
+
     @Value("${jwt.secret}")
     private String jwtSecret;
 
@@ -407,7 +410,10 @@ public class UserAuthController {
         }
 
         try {
+            // ✅ ลบ Profile ก่อน แล้วค่อยลบ User
+            userProfileRepository.deleteByUserId(id);
             userRepository.deleteById(id);
+
             response.put("success", true);
             response.put("message", "ลบผู้ใช้สำเร็จ");
             return ResponseEntity.ok(response);
