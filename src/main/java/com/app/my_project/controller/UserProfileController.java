@@ -11,6 +11,12 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
 
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.multipart.MultipartFile;
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/profile")
 @CrossOrigin(origins = "*")
@@ -21,6 +27,22 @@ public class UserProfileController {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Value("${cloudinary.cloud-name}")
+    private String cloudName;
+
+    @Value("${cloudinary.api-key}")
+    private String apiKey;
+
+    @Value("${cloudinary.api-secret}")
+    private String apiSecret;
+
+    private Cloudinary getCloudinary() {
+        return new Cloudinary(ObjectUtils.asMap(
+                "cloud_name", cloudName,
+                "api_key", apiKey,
+                "api_secret", apiSecret));
+    }
 
     // ดึง Profile ของ User
     @GetMapping("/{userId}")
@@ -111,6 +133,46 @@ public class UserProfileController {
             e.printStackTrace();
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    // อัปโหลดรูปโปรไฟล์
+    @PostMapping("/{userId}/image")
+    public ResponseEntity<?> uploadProfileImage(
+            @PathVariable Long userId,
+            @RequestParam("file") MultipartFile file) {
+
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            byte[] bytes = file.getBytes();
+
+            Map uploadResult = getCloudinary().uploader().upload(
+                    bytes,
+                    ObjectUtils.asMap(
+                            "folder", "bakery/profiles",
+                            "public_id", "profile_" + userId,
+                            "overwrite", true));
+
+            String imageUrl = (String) uploadResult.get("secure_url");
+
+            // อัปเดตใน tb_user_profile
+            Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
+            if (profileOpt.isPresent()) {
+                UserProfileEntity profile = profileOpt.get();
+                profile.setProfileImage(imageUrl);
+                userProfileRepository.save(profile);
+            }
+
+            response.put("success", true);
+            response.put("url", imageUrl);
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            response.put("success", false);
+            response.put("message", "อัปโหลดไม่สำเร็จ: " + e.getMessage());
             return ResponseEntity.badRequest().body(response);
         }
     }
