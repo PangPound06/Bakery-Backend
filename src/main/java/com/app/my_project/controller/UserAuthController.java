@@ -32,6 +32,8 @@ import java.net.http.HttpResponse;
 
 import jakarta.servlet.http.HttpServletResponse;
 
+import org.springframework.transaction.annotation.Transactional;
+
 @RestController
 @RequestMapping("/api/auth")
 @CrossOrigin(origins = "*")
@@ -401,6 +403,7 @@ public class UserAuthController {
     }
 
     // DELETE USER
+    @Transactional
     @DeleteMapping("/user/{id}")
     public ResponseEntity<?> deleteUser(@PathVariable Long id) {
         Map<String, Object> response = new HashMap<>();
