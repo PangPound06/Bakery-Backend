@@ -49,34 +49,47 @@ public class UserProfileController {
     public ResponseEntity<?> getProfile(@PathVariable Long userId) {
         Map<String, Object> response = new HashMap<>();
 
-        Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
+        // ✅ ดึง User ก่อนเพื่อเอา Email
+        Optional<UserEntity> userOpt = userRepository.findById(userId);
+        if (userOpt.isEmpty()) {
+            response.put("success", false);
+            response.put("message", "ไม่พบผู้ใช้");
+            return ResponseEntity.badRequest().body(response);
+        }
 
+        UserEntity user = userOpt.get();
+
+        // ✅ ค้นหา Profile จาก userId ก่อน
+        Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
         if (profileOpt.isPresent()) {
             response.put("success", true);
             response.put("profile", profileOpt.get());
             return ResponseEntity.ok(response);
         }
 
-        // ถ้ายังไม่มี profile → สร้างจาก UserEntity
-        Optional<UserEntity> userOpt = userRepository.findById(userId);
-        if (userOpt.isPresent()) {
-            UserEntity user = userOpt.get();
-
-            UserProfileEntity profile = new UserProfileEntity();
+        // ✅ ถ้าไม่มี → เช็คจาก Email (กรณี Profile เก่าค้างอยู่)
+        Optional<UserProfileEntity> profileByEmail = userProfileRepository.findByEmail(user.getEmail());
+        if (profileByEmail.isPresent()) {
+            // อัปเดต userId ให้ตรง
+            UserProfileEntity profile = profileByEmail.get();
             profile.setUserId(userId);
-            profile.setFullname(user.getFullname());
-            profile.setEmail(user.getEmail());
-            profile.setProfileImage(user.getProfileImage());
             userProfileRepository.save(profile);
-
             response.put("success", true);
             response.put("profile", profile);
             return ResponseEntity.ok(response);
         }
 
-        response.put("success", false);
-        response.put("message", "ไม่พบผู้ใช้");
-        return ResponseEntity.badRequest().body(response);
+        // สร้างใหม่
+        UserProfileEntity profile = new UserProfileEntity();
+        profile.setUserId(userId);
+        profile.setFullname(user.getFullname());
+        profile.setEmail(user.getEmail());
+        profile.setProfileImage(user.getProfileImage());
+        userProfileRepository.save(profile);
+
+        response.put("success", true);
+        response.put("profile", profile);
+        return ResponseEntity.ok(response);
     }
 
     // อัพเดท Profile
@@ -178,32 +191,32 @@ public class UserProfileController {
     }
 
     // ลบรูปโปรไฟล์
-@DeleteMapping("/{userId}/image")
-public ResponseEntity<?> deleteProfileImage(@PathVariable Long userId) {
-    Map<String, Object> response = new HashMap<>();
+    @DeleteMapping("/{userId}/image")
+    public ResponseEntity<?> deleteProfileImage(@PathVariable Long userId) {
+        Map<String, Object> response = new HashMap<>();
 
-    try {
-        Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
-        if (profileOpt.isPresent()) {
-            UserProfileEntity profile = profileOpt.get();
+        try {
+            Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
+            if (profileOpt.isPresent()) {
+                UserProfileEntity profile = profileOpt.get();
 
-            // ลบจาก Cloudinary
-            String publicId = "bakery/profiles/profile_" + userId;
-            getCloudinary().uploader().destroy(publicId, ObjectUtils.emptyMap());
+                // ลบจาก Cloudinary
+                String publicId = "bakery/profiles/profile_" + userId;
+                getCloudinary().uploader().destroy(publicId, ObjectUtils.emptyMap());
 
-            // เคลียร์ URL ในฐานข้อมูล
-            profile.setProfileImage(null);
-            userProfileRepository.save(profile);
+                // เคลียร์ URL ในฐานข้อมูล
+                profile.setProfileImage(null);
+                userProfileRepository.save(profile);
+            }
+
+            response.put("success", true);
+            response.put("message", "ลบรูปภาพสำเร็จ");
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
         }
-
-        response.put("success", true);
-        response.put("message", "ลบรูปภาพสำเร็จ");
-        return ResponseEntity.ok(response);
-
-    } catch (Exception e) {
-        response.put("success", false);
-        response.put("message", e.getMessage());
-        return ResponseEntity.badRequest().body(response);
     }
-}
 }
