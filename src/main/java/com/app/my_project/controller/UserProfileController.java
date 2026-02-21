@@ -176,4 +176,34 @@ public class UserProfileController {
             return ResponseEntity.badRequest().body(response);
         }
     }
+
+    // ลบรูปโปรไฟล์
+@DeleteMapping("/{userId}/image")
+public ResponseEntity<?> deleteProfileImage(@PathVariable Long userId) {
+    Map<String, Object> response = new HashMap<>();
+
+    try {
+        Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
+        if (profileOpt.isPresent()) {
+            UserProfileEntity profile = profileOpt.get();
+
+            // ลบจาก Cloudinary
+            String publicId = "bakery/profiles/profile_" + userId;
+            getCloudinary().uploader().destroy(publicId, ObjectUtils.emptyMap());
+
+            // เคลียร์ URL ในฐานข้อมูล
+            profile.setProfileImage(null);
+            userProfileRepository.save(profile);
+        }
+
+        response.put("success", true);
+        response.put("message", "ลบรูปภาพสำเร็จ");
+        return ResponseEntity.ok(response);
+
+    } catch (Exception e) {
+        response.put("success", false);
+        response.put("message", e.getMessage());
+        return ResponseEntity.badRequest().body(response);
+    }
+}
 }
