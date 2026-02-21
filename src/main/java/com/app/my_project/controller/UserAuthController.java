@@ -5,6 +5,8 @@ import com.app.my_project.entity.AdminEntity;
 import com.app.my_project.repository.UserRepository;
 import com.app.my_project.repository.AdminRepository;
 
+import com.app.my_project.repository.UserProfileRepository;
+
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
 
