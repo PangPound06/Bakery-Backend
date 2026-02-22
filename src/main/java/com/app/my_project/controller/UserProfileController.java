@@ -15,7 +15,6 @@ import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.multipart.MultipartFile;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/profile")
@@ -161,7 +160,8 @@ public class UserProfileController {
         try {
             byte[] bytes = file.getBytes();
 
-            Map uploadResult = getCloudinary().uploader().upload(
+            @SuppressWarnings("unchecked")
+            Map<String, Object> uploadResult = getCloudinary().uploader().upload(
                     bytes,
                     ObjectUtils.asMap(
                             "folder", "bakery/profiles",

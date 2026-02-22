@@ -26,8 +26,6 @@ public class CartController {
 
     @Autowired private DataSource dataSource;
 
-    // ...
-
     // ==================== DTO Classes ====================
 
     public static class AddToCartRequest {
@@ -102,15 +100,13 @@ public class CartController {
     // ==================== Helper Methods ====================
 
     private Algorithm getAlgorithm() {
-        return Algorithm.HMAC256(jwtSecret);  
+        return Algorithm.HMAC256(jwtSecret);
     }
 
-    // ✅ ใช้ connection จาก pool
     private Connection getConnection() throws SQLException {
         return dataSource.getConnection();
     }
 
-    // ✅ ใช้ connection ที่ส่งเข้ามา (ไม่สร้างใหม่)
     private String getUserEmailFromToken(Connection conn, String token) {
         try (PreparedStatement stmt = conn.prepareStatement("SELECT email FROM tb_userregister WHERE id = ?")) {
             JWTVerifier verifier = JWT.require(getAlgorithm()).build();
@@ -125,7 +121,6 @@ public class CartController {
         }
     }
 
-    // ✅ ใช้ try-with-resources ปิด PreparedStatement/ResultSet
     private Long getProductStock(Connection conn, Long productId) throws SQLException {
         String sql = "SELECT \"stockQuantity\" FROM tb_products WHERE id = ?";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -133,16 +128,6 @@ public class CartController {
             try (ResultSet rs = stmt.executeQuery()) {
                 return rs.next() ? rs.getLong("stockQuantity") : 0L;
             }
-        }
-    }
-
-    private void updateProductStock(Connection conn, Long productId, Long newStock) throws SQLException {
-        String sql = "UPDATE tb_products SET \"stockQuantity\" = ?, \"isAvailable\" = ? WHERE id = ?";
-        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setLong(1, newStock);
-            stmt.setBoolean(2, newStock > 0);
-            stmt.setLong(3, productId);
-            stmt.executeUpdate();
         }
     }
 
@@ -183,7 +168,6 @@ public class CartController {
             String productCategory = request.getCategory() != null ? request.getCategory() : "other";
             String productImage = request.getImage() != null ? request.getImage() : "";
 
-            // ✅ ตรวจสอบว่ามีสินค้าในตะกร้าแล้วหรือไม่
             try (PreparedStatement checkStmt = conn.prepareStatement(
                     "SELECT id, quantity, price FROM tb_cart WHERE email = ? AND product_id = ?")) {
                 checkStmt.setString(1, email);
@@ -239,6 +223,12 @@ public class CartController {
             if (email == null)
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
 
+            // ✅ ลบรายการ cart ที่สินค้าถูกลบไปแล้วออกก่อน
+            try (PreparedStatement cleanStmt = conn.prepareStatement(
+                    "DELETE FROM tb_cart WHERE product_id NOT IN (SELECT id FROM tb_products)")) {
+                cleanStmt.executeUpdate();
+            }
+
             try (PreparedStatement stmt = conn.prepareStatement(
                     "SELECT id, email, product_id, product_name, quantity, price, " +
                             "(quantity * price) as subtotal, category, image " +
@@ -280,8 +270,9 @@ public class CartController {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
             }
 
+            // ✅ ตรวจสอบว่า cartId มีอยู่จริงก่อน update
             try (PreparedStatement selectStmt = conn.prepareStatement(
-                    "SELECT product_id, quantity, price FROM tb_cart WHERE id = ? AND email = ?")) {
+                    "SELECT id FROM tb_cart WHERE id = ? AND email = ?")) {
                 selectStmt.setLong(1, cartId);
                 selectStmt.setString(2, email);
 
@@ -289,12 +280,6 @@ public class CartController {
                     if (!rs.next()) {
                         return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
                     }
-
-                    Long productId = rs.getLong("product_id");
-                    int currentQuantity = rs.getInt("quantity");
-                    int newQuantity = request.getQuantity();
-                    int quantityDiff = newQuantity - currentQuantity;
-
                 }
             }
 
@@ -323,11 +308,9 @@ public class CartController {
             if (email == null)
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
 
-            Long productId;
-            int quantity;
-
+            // ✅ ตรวจสอบว่า cartId มีอยู่จริงก่อนลบ
             try (PreparedStatement selectStmt = conn.prepareStatement(
-                    "SELECT product_id, quantity FROM tb_cart WHERE id = ? AND email = ?")) {
+                    "SELECT id FROM tb_cart WHERE id = ? AND email = ?")) {
                 selectStmt.setLong(1, cartId);
                 selectStmt.setString(2, email);
 
@@ -335,8 +318,6 @@ public class CartController {
                     if (!rs.next()) {
                         return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
                     }
-                    productId = rs.getLong("product_id");
-                    quantity = rs.getInt("quantity");
                 }
             }
 
@@ -361,12 +342,6 @@ public class CartController {
             String email = getUserEmailFromToken(conn, authHeader.replace("Bearer ", ""));
             if (email == null)
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-
-            // คืน stock ทุกรายการ
-            try (PreparedStatement selectStmt = conn.prepareStatement(
-                    "SELECT product_id, quantity FROM tb_cart WHERE email = ?")) {
-                selectStmt.setString(1, email);
-            }
 
             try (PreparedStatement deleteStmt = conn.prepareStatement("DELETE FROM tb_cart WHERE email = ?")) {
                 deleteStmt.setString(1, email);
