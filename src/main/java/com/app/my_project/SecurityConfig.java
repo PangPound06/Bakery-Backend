@@ -43,6 +43,7 @@ public class SecurityConfig {
                     "/api/auth/google",
                     "/api/auth/google/callback",
                     "/api/admin/login",
+                    "/api/products/**",
                     "/uploads/**"
                 ).permitAll()
                 // ทุกอย่างอื่นต้องมี JWT
