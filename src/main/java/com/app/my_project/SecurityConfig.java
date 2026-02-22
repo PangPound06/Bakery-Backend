@@ -43,7 +43,6 @@ public class SecurityConfig {
                     "/api/auth/google",
                     "/api/auth/google/callback",
                     "/api/admin/login",
-                    "/api/products/**",
                     "/uploads/**"
                 ).permitAll()
                 // ทุกอย่างอื่นต้องมี JWT
@@ -70,6 +69,7 @@ public class SecurityConfig {
                     path.startsWith("/api/auth/register") ||
                     path.startsWith("/api/auth/google") ||
                     path.startsWith("/api/admin/login") ||
+                    path.startsWith("/api/products") ||  
                     path.startsWith("/uploads/")) {
                     chain.doFilter(request, response);
                     return;
