@@ -2,15 +2,15 @@ package com.app.my_project.controller;
 
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
-import com.app.my_project.entity.ProductEntity;
 import com.app.my_project.repository.OrderRepository;
 import com.app.my_project.repository.OrderItemRepository;
-import com.app.my_project.repository.ProductRepository;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import javax.sql.DataSource;
+import java.sql.*;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -25,8 +25,13 @@ public class OrderController {
     @Autowired
     private OrderItemRepository orderItemRepository;
 
+    // ✅ เปลี่ยนจาก ProductRepository → DataSource เพื่อใช้ raw SQL
     @Autowired
-    private ProductRepository productRepository;
+    private DataSource dataSource;
+
+    private Connection getConnection() throws SQLException {
+        return dataSource.getConnection();
+    }
 
     // สร้าง Order ใหม่ + ตัด Stock
     @PostMapping
@@ -46,7 +51,6 @@ public class OrderController {
             order.setOrderStatus("pending");
             order.setCreatedAt(LocalDateTime.now());
 
-            // ✅ รับ slipImage (path ของสลิปที่อัพโหลด)
             if (request.get("slipImage") != null) {
                 order.setSlipImage((String) request.get("slipImage"));
             }
@@ -54,7 +58,6 @@ public class OrderController {
             order.setCardName((String) request.get("cardName"));
             order.setCardLast4((String) request.get("cardLast4"));
 
-            // ข้อมูลการจัดส่ง
             @SuppressWarnings("unchecked")
             Map<String, String> shippingInfo = (Map<String, String>) request.get("shippingInfo");
             if (shippingInfo != null) {
@@ -68,39 +71,41 @@ public class OrderController {
             OrderEntity savedOrder = orderRepository.save(order);
             System.out.println("✅ Order created: ID=" + savedOrder.getId());
 
-            // 2. บันทึก Items + ตัด Stock
+            // 2. บันทึก Items + ตัด Stock ด้วย raw SQL
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> items = (List<Map<String, Object>>) request.get("items");
 
             if (items != null) {
-                for (Map<String, Object> item : items) {
-                    Long productId = Long.parseLong(item.get("productId").toString());
-                    int quantity = Integer.parseInt(item.get("quantity").toString());
+                try (Connection conn = getConnection()) {
+                    for (Map<String, Object> item : items) {
+                        Long productId = Long.parseLong(item.get("productId").toString());
+                        int quantity = Integer.parseInt(item.get("quantity").toString());
 
-                    // บันทึก OrderItem
-                    OrderItemEntity orderItem = new OrderItemEntity();
-                    orderItem.setOrderId(savedOrder.getId());
-                    orderItem.setProductId(productId);
-                    orderItem.setProductName((String) item.get("productName"));
-                    orderItem.setPrice(Double.parseDouble(item.get("price").toString()));
-                    orderItem.setQuantity(quantity);
-                    orderItemRepository.save(orderItem);
+                        System.out.println("🔍 Processing productId: " + productId + ", quantity: " + quantity);
 
-                    // ✅ ตัด Stock
-                    Optional<ProductEntity> productOpt = productRepository.findById(productId);
-                    if (productOpt.isPresent()) {
-                        ProductEntity product = productOpt.get();
-                        Long currentStock = product.getStockQuantity() != null ? product.getStockQuantity() : 0L;
-                        long newStock = currentStock - quantity;
-                        if (newStock < 0)
-                            newStock = 0;
+                        // บันทึก OrderItem
+                        OrderItemEntity orderItem = new OrderItemEntity();
+                        orderItem.setOrderId(savedOrder.getId());
+                        orderItem.setProductId(productId);
+                        orderItem.setProductName((String) item.get("productName"));
+                        orderItem.setPrice(Double.parseDouble(item.get("price").toString()));
+                        orderItem.setQuantity(quantity);
+                        orderItemRepository.save(orderItem);
 
-                        product.setStockQuantity(newStock);
-                        product.setIsAvailable(newStock > 0);
-                        productRepository.save(product);
+                        // ✅ ตัด Stock ด้วย raw SQL — แก้ปัญหา JPA map column ผิด
+                        String updateStockSql =
+                            "UPDATE tb_products " +
+                            "SET \"stockQuantity\" = GREATEST(\"stockQuantity\" - ?, 0), " +
+                            "    \"isAvailable\"   = (GREATEST(\"stockQuantity\" - ?, 0) > 0) " +
+                            "WHERE id = ?";
 
-                        System.out.println(
-                                "✅ Stock updated: " + product.getName() + " (" + currentStock + " → " + newStock + ")");
+                        try (PreparedStatement stockStmt = conn.prepareStatement(updateStockSql)) {
+                            stockStmt.setInt(1, quantity);
+                            stockStmt.setInt(2, quantity);
+                            stockStmt.setLong(3, productId);
+                            int rows = stockStmt.executeUpdate();
+                            System.out.println("✅ Stock updated for productId: " + productId + " (" + rows + " row affected)");
+                        }
                     }
                 }
             }
@@ -196,7 +201,7 @@ public class OrderController {
         return ResponseEntity.ok(orders);
     }
 
-    // ยกเลิก Order + คืน Stock
+    // ยกเลิก Order + คืน Stock ด้วย raw SQL
     @PutMapping("/{id}/cancel")
     public ResponseEntity<?> cancelOrder(@PathVariable Long id) {
         Map<String, Object> response = new HashMap<>();
@@ -217,18 +222,22 @@ public class OrderController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // ✅ คืน Stock
+            // ✅ คืน Stock ด้วย raw SQL
             List<OrderItemEntity> items = orderItemRepository.findByOrderId(id);
-            for (OrderItemEntity item : items) {
-                Optional<ProductEntity> productOpt = productRepository.findById(item.getProductId());
-                if (productOpt.isPresent()) {
-                    ProductEntity product = productOpt.get();
-                    Long currentStock = product.getStockQuantity() != null ? product.getStockQuantity() : 0L;
-                    product.setStockQuantity(currentStock + item.getQuantity());
-                    product.setIsAvailable(true);
-                    productRepository.save(product);
+            try (Connection conn = getConnection()) {
+                for (OrderItemEntity item : items) {
+                    String restoreStockSql =
+                        "UPDATE tb_products " +
+                        "SET \"stockQuantity\" = \"stockQuantity\" + ?, " +
+                        "    \"isAvailable\"   = true " +
+                        "WHERE id = ?";
 
-                    System.out.println("✅ Stock restored: " + product.getName());
+                    try (PreparedStatement stockStmt = conn.prepareStatement(restoreStockSql)) {
+                        stockStmt.setInt(1, item.getQuantity());
+                        stockStmt.setLong(2, item.getProductId());
+                        stockStmt.executeUpdate();
+                        System.out.println("✅ Stock restored for productId: " + item.getProductId());
+                    }
                 }
             }
 
@@ -252,7 +261,6 @@ public class OrderController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            // แปลง ORD22603774 → 22603774
             String numericId = orderId.replace("ORD", "").replaceAll("[^0-9]", "");
             Long id = Long.parseLong(numericId);
 
