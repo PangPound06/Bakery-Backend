@@ -326,8 +326,16 @@ public class UserAuthController {
             return ResponseEntity.badRequest().body(response);
         }
 
+        UserEntity user = userOptional.get();
+        Map<String, Object> userData = new HashMap<>();
+        userData.put("id", user.getId());
+        userData.put("email", user.getEmail());
+        userData.put("fullname", user.getFullname());
+        userData.put("profileImage", user.getProfileImage());
+        userData.put("authProvider", user.getAuthProvider());
+
         response.put("success", true);
-        response.put("user", userOptional.get());
+        response.put("user", userData);
         return ResponseEntity.ok(response);
     }
 

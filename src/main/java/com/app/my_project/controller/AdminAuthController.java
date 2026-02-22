@@ -187,8 +187,16 @@ public class AdminAuthController {
             return ResponseEntity.badRequest().body(response);
         }
 
+        AdminEntity admin = adminOptional.get();
+        Map<String, Object> adminData = new HashMap<>();
+        adminData.put("id", admin.getId());
+        adminData.put("email", admin.getEmail());
+        adminData.put("fullname", admin.getFullname());
+        adminData.put("role", admin.getRole());
+        adminData.put("status", admin.getStatus());
+
         response.put("success", true);
-        response.put("admin", adminOptional.get());
+        response.put("admin", adminData);
         return ResponseEntity.ok(response);
     }
 
