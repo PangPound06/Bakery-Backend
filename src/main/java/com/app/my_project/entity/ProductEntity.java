@@ -2,6 +2,8 @@ package com.app.my_project.entity;
 
 import jakarta.persistence.*;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 @Entity
 @Table(name = "tb_products")
 public class ProductEntity {
@@ -23,10 +25,12 @@ public class ProductEntity {
 
     // ⚠️ แก้ไขจุดนี้: ชื่อต้องตรงกับ SQL ใน ProductController ของเดิม
     @Column(name = "\"stockQuantity\"") 
+    @JsonProperty("stockQuantity")
     private Long stockQuantity;
 
     // ⚠️ แก้ไขจุดนี้: ชื่อต้องตรงกับ SQL ใน ProductController ของเดิม
     @Column(name = "\"isAvailable\"")
+    @JsonProperty("isAvailable")
     private Boolean isAvailable;
 
     // --- Constructor ---
@@ -51,6 +55,8 @@ public class ProductEntity {
     // Getters Setters ที่สำคัญสำหรับ OrderController
     public Long getStockQuantity() { return stockQuantity; }
     public void setStockQuantity(Long stockQuantity) { this.stockQuantity = stockQuantity; }
+
+    @JsonProperty("isAvailable")
     public Boolean getIsAvailable() { return isAvailable; }
     public void setIsAvailable(Boolean isAvailable) { this.isAvailable = isAvailable; }
 }
