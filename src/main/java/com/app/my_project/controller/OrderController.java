@@ -16,7 +16,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/orders")
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "https://bakery-frontend-next.vercel.app")
 public class OrderController {
 
     @Autowired
@@ -93,18 +93,18 @@ public class OrderController {
                         orderItemRepository.save(orderItem);
 
                         // ✅ ตัด Stock ด้วย raw SQL — แก้ปัญหา JPA map column ผิด
-                        String updateStockSql =
-                            "UPDATE tb_products " +
-                            "SET \"stockQuantity\" = GREATEST(\"stockQuantity\" - ?, 0), " +
-                            "    \"isAvailable\"   = (GREATEST(\"stockQuantity\" - ?, 0) > 0) " +
-                            "WHERE id = ?";
+                        String updateStockSql = "UPDATE tb_products " +
+                                "SET \"stockQuantity\" = GREATEST(\"stockQuantity\" - ?, 0), " +
+                                "    \"isAvailable\"   = (GREATEST(\"stockQuantity\" - ?, 0) > 0) " +
+                                "WHERE id = ?";
 
                         try (PreparedStatement stockStmt = conn.prepareStatement(updateStockSql)) {
                             stockStmt.setInt(1, quantity);
                             stockStmt.setInt(2, quantity);
                             stockStmt.setLong(3, productId);
                             int rows = stockStmt.executeUpdate();
-                            System.out.println("✅ Stock updated for productId: " + productId + " (" + rows + " row affected)");
+                            System.out.println(
+                                    "✅ Stock updated for productId: " + productId + " (" + rows + " row affected)");
                         }
                     }
                 }
@@ -124,7 +124,7 @@ public class OrderController {
     }
 
     // ดึง Orders ของ User (ใช้ email)
-    @GetMapping("/user/{email}")
+    @GetMapping("/user")
     public ResponseEntity<?> getOrdersByEmail(@PathVariable String email) {
         try {
             List<OrderEntity> orders = orderRepository.findByEmailOrderByCreatedAtDesc(email);
@@ -226,11 +226,10 @@ public class OrderController {
             List<OrderItemEntity> items = orderItemRepository.findByOrderId(id);
             try (Connection conn = getConnection()) {
                 for (OrderItemEntity item : items) {
-                    String restoreStockSql =
-                        "UPDATE tb_products " +
-                        "SET \"stockQuantity\" = \"stockQuantity\" + ?, " +
-                        "    \"isAvailable\"   = true " +
-                        "WHERE id = ?";
+                    String restoreStockSql = "UPDATE tb_products " +
+                            "SET \"stockQuantity\" = \"stockQuantity\" + ?, " +
+                            "    \"isAvailable\"   = true " +
+                            "WHERE id = ?";
 
                     try (PreparedStatement stockStmt = conn.prepareStatement(restoreStockSql)) {
                         stockStmt.setInt(1, item.getQuantity());

@@ -20,7 +20,7 @@ import org.springframework.beans.factory.annotation.Value;
 
 @RestController
 @RequestMapping("/api/admin")
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "https://bakery-frontend-next.vercel.app")
 public class AdminAuthController {
 
     @Autowired
