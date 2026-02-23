@@ -15,16 +15,16 @@ import com.auth0.jwt.algorithms.Algorithm;
 
 import javax.sql.DataSource;
 
-
 @RestController
 @RequestMapping("/api/cart")
-@CrossOrigin(origins = "http://localhost:3000")
+@CrossOrigin(origins = { "http://localhost:3000", "https://bakery-frontend-next.vercel.app" })
 public class CartController {
 
     @Value("${jwt.secret}")
     private String jwtSecret;
 
-    @Autowired private DataSource dataSource;
+    @Autowired
+    private DataSource dataSource;
 
     // ==================== DTO Classes ====================
 
@@ -33,24 +33,65 @@ public class CartController {
         private String name, category, image;
         private Integer price, quantity;
 
-        public Long getProductId() { return productId; }
-        public void setProductId(Long productId) { this.productId = productId; }
-        public String getName() { return name; }
-        public void setName(String name) { this.name = name; }
-        public Integer getPrice() { return price; }
-        public void setPrice(Integer price) { this.price = price; }
-        public String getCategory() { return category; }
-        public void setCategory(String category) { this.category = category; }
-        public String getImage() { return image; }
-        public void setImage(String image) { this.image = image; }
-        public Integer getQuantity() { return quantity; }
-        public void setQuantity(Integer quantity) { this.quantity = quantity; }
+        public Long getProductId() {
+            return productId;
+        }
+
+        public void setProductId(Long productId) {
+            this.productId = productId;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public Integer getPrice() {
+            return price;
+        }
+
+        public void setPrice(Integer price) {
+            this.price = price;
+        }
+
+        public String getCategory() {
+            return category;
+        }
+
+        public void setCategory(String category) {
+            this.category = category;
+        }
+
+        public String getImage() {
+            return image;
+        }
+
+        public void setImage(String image) {
+            this.image = image;
+        }
+
+        public Integer getQuantity() {
+            return quantity;
+        }
+
+        public void setQuantity(Integer quantity) {
+            this.quantity = quantity;
+        }
     }
 
     public static class UpdateCartRequest {
         private Integer quantity;
-        public Integer getQuantity() { return quantity; }
-        public void setQuantity(Integer quantity) { this.quantity = quantity; }
+
+        public Integer getQuantity() {
+            return quantity;
+        }
+
+        public void setQuantity(Integer quantity) {
+            this.quantity = quantity;
+        }
     }
 
     public static class CartItem {
@@ -71,15 +112,41 @@ public class CartController {
             this.image = image;
         }
 
-        public Long getId() { return id; }
-        public String getEmail() { return email; }
-        public Long getProductId() { return productId; }
-        public String getProductName() { return productName; }
-        public Integer getQuantity() { return quantity; }
-        public Integer getPrice() { return price; }
-        public String getCategory() { return category; }
-        public String getImage() { return image; }
-        public Integer getSubtotal() { return subtotal; }
+        public Long getId() {
+            return id;
+        }
+
+        public String getEmail() {
+            return email;
+        }
+
+        public Long getProductId() {
+            return productId;
+        }
+
+        public String getProductName() {
+            return productName;
+        }
+
+        public Integer getQuantity() {
+            return quantity;
+        }
+
+        public Integer getPrice() {
+            return price;
+        }
+
+        public String getCategory() {
+            return category;
+        }
+
+        public String getImage() {
+            return image;
+        }
+
+        public Integer getSubtotal() {
+            return subtotal;
+        }
     }
 
     public static class CartResponse {
@@ -92,9 +159,17 @@ public class CartController {
             this.totalItems = totalItems;
         }
 
-        public List<CartItem> getItems() { return items; }
-        public Integer getTotalAmount() { return totalAmount; }
-        public Integer getTotalItems() { return totalItems; }
+        public List<CartItem> getItems() {
+            return items;
+        }
+
+        public Integer getTotalAmount() {
+            return totalAmount;
+        }
+
+        public Integer getTotalItems() {
+            return totalItems;
+        }
     }
 
     // ==================== Helper Methods ====================
@@ -176,8 +251,17 @@ public class CartController {
                 try (ResultSet rs = checkStmt.executeQuery()) {
                     if (rs.next()) {
                         int currentQuantity = rs.getInt("quantity");
-                        int priceInDb = rs.getInt("price");
                         int newQuantity = currentQuantity + quantityToAdd;
+
+                        // ✅ เช็คว่า quantity ใหม่รวมกันแล้วไม่เกิน stock
+                        if (newQuantity > currentStock) {
+                            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                    .body(java.util.Collections.singletonMap("error",
+                                            "สินค้าคงเหลือไม่เพียงพอ (เหลือ " + currentStock + " ชิ้น, ในตะกร้ามีแล้ว "
+                                                    + currentQuantity + " ชิ้น)"));
+                        }
+
+                        int priceInDb = rs.getInt("price");
                         int newSubtotal = newQuantity * priceInDb;
 
                         try (PreparedStatement updateStmt = conn.prepareStatement(
