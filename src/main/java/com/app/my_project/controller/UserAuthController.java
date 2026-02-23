@@ -36,7 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @RestController
 @RequestMapping("/api/auth")
-//@CrossOrigin(origins = "*")
+// @CrossOrigin(origins = "*")
 @CrossOrigin(origins = "https://bakery-frontend-next.vercel.app")
 public class UserAuthController {
 
@@ -312,7 +312,13 @@ public class UserAuthController {
     // GET ALL USERS
     @GetMapping("/users")
     public ResponseEntity<?> getAllUsers() {
-        return ResponseEntity.ok(userRepository.findAll());
+        return ResponseEntity.ok(
+                userRepository.findAll().stream().map(user -> {
+                    Map<String, Object> u = new HashMap<>();
+                    u.put("id", user.getId());
+                    u.put("profileImage", user.getProfileImage());
+                    return u;
+                }).toList());
     }
 
     // GET USER BY ID
