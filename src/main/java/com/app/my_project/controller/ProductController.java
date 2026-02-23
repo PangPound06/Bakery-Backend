@@ -19,7 +19,7 @@ import javax.sql.DataSource;
 
 @RestController
 @RequestMapping("/api/products")
-@CrossOrigin(origins = "http://localhost:3000")
+@CrossOrigin(origins = {"http://localhost:3000", "https://bakery-frontend-next.vercel.app"})
 public class ProductController {
 
     @Value("${jwt.secret}")
