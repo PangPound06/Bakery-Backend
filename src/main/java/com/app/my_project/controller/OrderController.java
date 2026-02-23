@@ -124,7 +124,7 @@ public class OrderController {
     }
 
     // ดึง Orders ของ User (ใช้ email)
-    @GetMapping("/user")
+    @GetMapping("/user/{email}")
     public ResponseEntity<?> getOrdersByEmail(@PathVariable String email) {
         try {
             List<OrderEntity> orders = orderRepository.findByEmailOrderByCreatedAtDesc(email);
