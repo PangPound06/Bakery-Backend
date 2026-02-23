@@ -96,11 +96,11 @@ public class CartController {
 
     public static class CartItem {
         private Long id, productId;
-        private Integer quantity, price, subtotal;
+        private Integer quantity, price, subtotal, stock;
         private String email, productName, category, image;
 
         public CartItem(Long id, String email, Long productId, String productName, Integer quantity,
-                Integer price, Integer subtotal, String category, String image) {
+                Integer price, Integer subtotal, String category, String image, Integer stock) {
             this.id = id;
             this.email = email;
             this.productId = productId;
@@ -110,6 +110,7 @@ public class CartController {
             this.subtotal = subtotal;
             this.category = category;
             this.image = image;
+            this.stock = stock; // ✅ เพิ่ม
         }
 
         public Long getId() {
@@ -146,6 +147,10 @@ public class CartController {
 
         public Integer getSubtotal() {
             return subtotal;
+        }
+
+        public Integer getStock() {
+            return stock;
         }
     }
 
@@ -314,9 +319,12 @@ public class CartController {
             }
 
             try (PreparedStatement stmt = conn.prepareStatement(
-                    "SELECT id, email, product_id, product_name, quantity, price, " +
-                            "(quantity * price) as subtotal, category, image " +
-                            "FROM tb_cart WHERE email = ? ORDER BY id DESC")) {
+                    "SELECT c.id, c.email, c.product_id, c.product_name, c.quantity, c.price, " +
+                            "(c.quantity * c.price) as subtotal, c.category, c.image, " +
+                            "p.\"stockQuantity\" as stock " +
+                            "FROM tb_cart c " +
+                            "LEFT JOIN tb_products p ON c.product_id = p.id " +
+                            "WHERE c.email = ? ORDER BY c.id DESC")) {
                 stmt.setString(1, email);
 
                 try (ResultSet rs = stmt.executeQuery()) {
@@ -330,7 +338,8 @@ public class CartController {
                         items.add(new CartItem(
                                 rs.getLong("id"), rs.getString("email"), rs.getLong("product_id"),
                                 rs.getString("product_name"), quantity, rs.getInt("price"),
-                                subtotal, rs.getString("category"), rs.getString("image")));
+                                subtotal, rs.getString("category"), rs.getString("image"),
+                                rs.getInt("stock")));
 
                         totalAmount += subtotal;
                         totalItems += quantity;
@@ -354,17 +363,25 @@ public class CartController {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
             }
 
-            // ✅ ตรวจสอบว่า cartId มีอยู่จริงก่อน update
+            // ดึง productId จาก cartId
+            Long productId = null;
             try (PreparedStatement selectStmt = conn.prepareStatement(
-                    "SELECT id FROM tb_cart WHERE id = ? AND email = ?")) {
+                    "SELECT id, product_id FROM tb_cart WHERE id = ? AND email = ?")) {
                 selectStmt.setLong(1, cartId);
                 selectStmt.setString(2, email);
-
                 try (ResultSet rs = selectStmt.executeQuery()) {
-                    if (!rs.next()) {
+                    if (!rs.next())
                         return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-                    }
+                    productId = rs.getLong("product_id");
                 }
+            }
+
+            // ✅ เช็ค stock ก่อน update
+            Long currentStock = getProductStock(conn, productId);
+            if (request.getQuantity() > currentStock) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(java.util.Collections.singletonMap("error",
+                                "สินค้าคงเหลือไม่เพียงพอ (เหลือ " + currentStock + " ชิ้น)"));
             }
 
             try (PreparedStatement updateStmt = conn.prepareStatement(
@@ -373,7 +390,6 @@ public class CartController {
                 updateStmt.setInt(2, request.getQuantity());
                 updateStmt.setLong(3, cartId);
                 updateStmt.setString(4, email);
-
                 return updateStmt.executeUpdate() > 0
                         ? ResponseEntity.ok().build()
                         : ResponseEntity.status(HttpStatus.NOT_FOUND).build();
