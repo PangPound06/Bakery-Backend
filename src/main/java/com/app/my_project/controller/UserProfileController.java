@@ -18,7 +18,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/profile")
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "https://bakery-frontend-next.vercel.app")
 public class UserProfileController {
 
     @Autowired
