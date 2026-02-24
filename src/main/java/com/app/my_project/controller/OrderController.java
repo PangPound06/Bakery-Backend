@@ -195,10 +195,22 @@ public class OrderController {
     }
 
     // ดึง Orders ทั้งหมด (สำหรับ Admin)
+    // ดึง Orders ทั้งหมด (สำหรับ Admin)
     @GetMapping("/all")
     public ResponseEntity<?> getAllOrders() {
-        List<OrderEntity> orders = orderRepository.findAllByOrderByCreatedAtDesc();
-        return ResponseEntity.ok(orders);
+        return ResponseEntity.ok(
+                orderRepository.findAllByOrderByCreatedAtDesc().stream().map(order -> {
+                    Map<String, Object> o = new HashMap<>();
+                    o.put("id", order.getId());
+                    o.put("email", order.getEmail());
+                    o.put("total", order.getTotal());
+                    o.put("orderStatus", order.getOrderStatus());
+                    o.put("paymentStatus", order.getPaymentStatus());
+                    o.put("createdAt", order.getCreatedAt());
+                    // ไม่ส่ง: slipImage, cardName, cardLast4, paymentId, receiverName,
+                    // receiverPhone, receiverAddress
+                    return o;
+                }).toList());
     }
 
     // ยกเลิก Order + คืน Stock ด้วย raw SQL
