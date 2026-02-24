@@ -172,7 +172,14 @@ public class AdminAuthController {
     // GET ALL ADMINS
     @GetMapping("/list")
     public ResponseEntity<?> getAllAdmins() {
-        return ResponseEntity.ok(adminRepository.findAll());
+        return ResponseEntity.ok(
+                adminRepository.findAll().stream().map(admin -> {
+                    Map<String, Object> a = new HashMap<>();
+                    a.put("id", admin.getId());
+                    a.put("fullname", admin.getFullname());
+                    a.put("status", admin.getStatus());
+                    return a;
+                }).toList());
     }
 
     // GET ADMIN BY ID

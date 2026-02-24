@@ -316,6 +316,7 @@ public class UserAuthController {
                 userRepository.findAll().stream().map(user -> {
                     Map<String, Object> u = new HashMap<>();
                     u.put("id", user.getId());
+                    u.put("email", user.getEmail());
                     u.put("profileImage", user.getProfileImage());
                     return u;
                 }).toList());
