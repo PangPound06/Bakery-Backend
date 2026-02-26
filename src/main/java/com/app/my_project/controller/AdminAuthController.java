@@ -176,7 +176,9 @@ public class AdminAuthController {
                 adminRepository.findAll().stream().map(admin -> {
                     Map<String, Object> a = new HashMap<>();
                     a.put("id", admin.getId());
+                    a.put("email", admin.getEmail());
                     a.put("fullname", admin.getFullname());
+                    a.put("role", admin.getRole());
                     a.put("status", admin.getStatus());
                     return a;
                 }).toList());
