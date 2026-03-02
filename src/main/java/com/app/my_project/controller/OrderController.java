@@ -16,7 +16,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/orders")
-@CrossOrigin(origins = "https://bakery-frontend-next.vercel.app")
+@CrossOrigin(origins = "https://poundbakery.vercel.app")
 public class OrderController {
 
     @Autowired
