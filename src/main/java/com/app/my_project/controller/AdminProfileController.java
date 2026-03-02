@@ -12,7 +12,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/admin/profile")
-@CrossOrigin(origins = "https://bakery-frontend-next.vercel.app")
+@CrossOrigin(origins = "https://poundbakery.vercel.app")
 public class AdminProfileController {
 
     @Autowired

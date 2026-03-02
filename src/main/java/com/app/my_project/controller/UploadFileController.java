@@ -20,7 +20,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/upload")
-@CrossOrigin(origins = "https://bakery-frontend-next.vercel.app")
+@CrossOrigin(origins = "https://poundbakery.vercel.app")
 /*
  * public class UploadFileController {
  * 

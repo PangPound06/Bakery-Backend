@@ -37,7 +37,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RestController
 @RequestMapping("/api/auth")
 // @CrossOrigin(origins = "*")
-@CrossOrigin(origins = "https://bakery-frontend-next.vercel.app")
+@CrossOrigin(origins = "https://poundbakery.vercel.app")
 public class UserAuthController {
 
     @Autowired
