@@ -284,6 +284,12 @@ public class UserAuthController {
 
         email = email.trim().toLowerCase();
 
+        if (email.endsWith("@empbakery.com")) {
+            response.put("success", false);
+            response.put("message", "ไม่สามารถใช้อีเมล @empbakery.com สมัครสมาชิกได้");
+            return ResponseEntity.badRequest().body(response);
+        }
+
         if (userRepository.existsByEmail(email) || adminRepository.existsByEmail(email)) {
             response.put("success", false);
             response.put("message", "อีเมลนี้ถูกใช้งานแล้ว");
