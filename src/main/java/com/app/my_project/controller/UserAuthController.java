@@ -166,7 +166,17 @@ public class UserAuthController {
 
     // GOOGLE OAUTH - Step 2
     @GetMapping("/google/callback")
-    public void googleCallback(@RequestParam("code") String code, HttpServletResponse httpResponse) throws Exception {
+    public void googleCallback(
+            @RequestParam(value = "code", required = false) String code,
+            @RequestParam(value = "error", required = false) String error,
+            HttpServletResponse httpResponse) throws Exception {
+
+        // ✅ ผู้ใช้กดยกเลิก → redirect กลับหน้า login
+        if (error != null || code == null) {
+            httpResponse.sendRedirect(frontendUrl + "/login");
+            return;
+        }
+
         ObjectMapper mapper = new ObjectMapper();
         HttpClient client = HttpClient.newHttpClient();
 
