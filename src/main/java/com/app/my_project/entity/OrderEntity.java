@@ -14,6 +14,9 @@ public class OrderEntity {
     @Column(nullable = false)
     private String email;
 
+    @Column(unique = true)
+    private String ordCode;
+
     private Double subtotal;
     private Double shipping;
     private Double total;
@@ -190,5 +193,14 @@ public class OrderEntity {
 
     public void setCardLast4(String cardLast4) {
         this.cardLast4 = cardLast4;
+    }
+
+    // Getter/Setter
+    public String getOrdCode() {
+        return ordCode;
+    }
+
+    public void setOrdCode(String ordCode) {
+        this.ordCode = ordCode;
     }
 }
