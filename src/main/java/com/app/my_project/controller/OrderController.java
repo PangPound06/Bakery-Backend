@@ -25,7 +25,6 @@ public class OrderController {
     @Autowired
     private OrderItemRepository orderItemRepository;
 
-    // ✅ เปลี่ยนจาก ProductRepository → DataSource เพื่อใช้ raw SQL
     @Autowired
     private DataSource dataSource;
 
@@ -71,6 +70,13 @@ public class OrderController {
             OrderEntity savedOrder = orderRepository.save(order);
             System.out.println("✅ Order created: ID=" + savedOrder.getId());
 
+            // ✅ Generate และบันทึก ordCode
+            String ordCode = "ORD" + String.format("%06d", savedOrder.getId() * 104729L % 1000000L)
+                    + savedOrder.getId();
+            savedOrder.setOrdCode(ordCode);
+            orderRepository.save(savedOrder);
+            System.out.println("✅ OrdCode: " + ordCode);
+
             // 2. บันทึก Items + ตัด Stock ด้วย raw SQL
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> items = (List<Map<String, Object>>) request.get("items");
@@ -92,7 +98,7 @@ public class OrderController {
                         orderItem.setQuantity(quantity);
                         orderItemRepository.save(orderItem);
 
-                        // ✅ ตัด Stock ด้วย raw SQL — แก้ปัญหา JPA map column ผิด
+                        // ✅ ตัด Stock ด้วย raw SQL
                         String updateStockSql = "UPDATE tb_products " +
                                 "SET \"stockQuantity\" = GREATEST(\"stockQuantity\" - ?, 0), " +
                                 "    \"isAvailable\"   = (GREATEST(\"stockQuantity\" - ?, 0) > 0) " +
@@ -113,6 +119,7 @@ public class OrderController {
             response.put("success", true);
             response.put("message", "สร้างคำสั่งซื้อสำเร็จ");
             response.put("orderId", savedOrder.getId());
+            response.put("ordCode", ordCode);
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
@@ -195,21 +202,19 @@ public class OrderController {
     }
 
     // ดึง Orders ทั้งหมด (สำหรับ Admin)
-    // ดึง Orders ทั้งหมด (สำหรับ Admin)
     @GetMapping("/all")
     public ResponseEntity<?> getAllOrders() {
         return ResponseEntity.ok(
                 orderRepository.findAllByOrderByCreatedAtDesc().stream().map(order -> {
                     Map<String, Object> o = new HashMap<>();
                     o.put("id", order.getId());
+                    o.put("ordCode", order.getOrdCode());
                     o.put("email", order.getEmail());
                     o.put("total", order.getTotal());
                     o.put("orderStatus", order.getOrderStatus());
                     o.put("paymentStatus", order.getPaymentStatus());
                     o.put("createdAt", order.getCreatedAt());
                     o.put("receiverName", order.getReceiverName());
-                    // ไม่ส่ง: slipImage, cardName, cardLast4, paymentId, receiverName,
-                    // receiverPhone, receiverAddress
                     return o;
                 }).toList());
     }
@@ -273,10 +278,27 @@ public class OrderController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            String numericId = orderId.replace("ORD", "").replaceAll("[^0-9]", "");
-            Long id = Long.parseLong(numericId);
+            String code = orderId.toUpperCase().trim();
 
-            Optional<OrderEntity> orderOpt = orderRepository.findById(id);
+            // 1. ค้นหาจาก ordCode ใน database ก่อน
+            Optional<OrderEntity> orderOpt = orderRepository.findByOrdCode(code);
+
+            // 2. ถ้าไม่เจอ ลองแปลงกลับเป็น id ด้วยสูตรเดิม (สำหรับ order เก่า)
+            if (orderOpt.isEmpty()) {
+                // ลองหาทุก order แล้วเทียบ ordCode ที่สร้างจากสูตร
+                List<OrderEntity> allOrders = orderRepository.findAll();
+                for (OrderEntity o : allOrders) {
+                    String generated = "ORD" + String.format("%06d", o.getId() * 104729L % 1000000L) + o.getId();
+                    if (generated.equalsIgnoreCase(code)) {
+                        orderOpt = Optional.of(o);
+                        // อัปเดต ordCode ให้ order เก่าด้วย
+                        o.setOrdCode(generated);
+                        orderRepository.save(o);
+                        break;
+                    }
+                }
+            }
+
             if (orderOpt.isEmpty()) {
                 response.put("success", false);
                 response.put("message", "ไม่พบคำสั่งซื้อ");
@@ -284,7 +306,7 @@ public class OrderController {
             }
 
             OrderEntity order = orderOpt.get();
-            List<OrderItemEntity> items = orderItemRepository.findByOrderId(id);
+            List<OrderItemEntity> items = orderItemRepository.findByOrderId(order.getId());
 
             response.put("success", true);
             response.put("order", order);
@@ -295,6 +317,30 @@ public class OrderController {
             response.put("success", false);
             response.put("message", "หมายเลขคำสั่งซื้อไม่ถูกต้อง");
             return ResponseEntity.ok(response);
+        }
+    }
+
+    @PutMapping("/backfill-ordcode")
+    public ResponseEntity<?> backfillOrdCode() {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            List<OrderEntity> orders = orderRepository.findAll();
+            int count = 0;
+            for (OrderEntity order : orders) {
+                if (order.getOrdCode() == null || order.getOrdCode().isEmpty()) {
+                    String code = "ORD" + String.format("%06d", order.getId() * 104729L % 1000000L) + order.getId();
+                    order.setOrdCode(code);
+                    orderRepository.save(order);
+                    count++;
+                }
+            }
+            response.put("success", true);
+            response.put("message", "อัปเดต " + count + " รายการ");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
         }
     }
 }
