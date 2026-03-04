@@ -207,6 +207,7 @@ public class OrderController {
                     o.put("orderStatus", order.getOrderStatus());
                     o.put("paymentStatus", order.getPaymentStatus());
                     o.put("createdAt", order.getCreatedAt());
+                    o.put("receiverName", order.getReceiverName());
                     // ไม่ส่ง: slipImage, cardName, cardLast4, paymentId, receiverName,
                     // receiverPhone, receiverAddress
                     return o;
