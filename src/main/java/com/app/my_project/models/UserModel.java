@@ -1,4 +1,4 @@
-package com.app.models;
+package com.app.my_project.models;
 
 public class UserModel {
     private Integer id;

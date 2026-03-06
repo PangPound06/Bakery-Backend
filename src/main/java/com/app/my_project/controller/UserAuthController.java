@@ -2,9 +2,12 @@ package com.app.my_project.controller;
 
 import com.app.my_project.entity.UserEntity;
 import com.app.my_project.entity.AdminEntity;
+import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.repository.UserRepository;
 import com.app.my_project.repository.AdminRepository;
-
+import com.app.my_project.repository.FavoriteRepository;
+import com.app.my_project.repository.OrderItemRepository;
+import com.app.my_project.repository.OrderRepository;
 import com.app.my_project.repository.UserProfileRepository;
 
 import com.auth0.jwt.JWT;
@@ -18,9 +21,14 @@ import org.springframework.web.bind.annotation.*;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.sql.PreparedStatement;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,6 +59,18 @@ public class UserAuthController {
 
     @Autowired
     private UserProfileRepository userProfileRepository;
+
+    @Autowired
+    private OrderRepository orderRepository;
+
+    @Autowired
+    private OrderItemRepository orderItemRepository;
+
+    @Autowired
+    private FavoriteRepository favoriteRepository;
+
+    @Autowired
+    private DataSource dataSource;
 
     @Value("${jwt.secret}")
     private String jwtSecret;
@@ -440,24 +460,50 @@ public class UserAuthController {
     public ResponseEntity<?> deleteUser(@PathVariable Long id) {
         Map<String, Object> response = new HashMap<>();
 
-        if (!userRepository.existsById(id)) {
+        Optional<UserEntity> userOpt = userRepository.findById(id);
+        if (userOpt.isEmpty()) {
             response.put("success", false);
             response.put("message", "ไม่พบผู้ใช้");
             return ResponseEntity.badRequest().body(response);
         }
 
         try {
-            // ✅ ลบ Profile ก่อน แล้วค่อยลบ User
+            UserEntity user = userOpt.get();
+            String email = user.getEmail();
+
+            // 1. ลบ order items ของ orders ที่เป็นของ user
+            List<OrderEntity> userOrders = orderRepository.findByEmailOrderByCreatedAtDesc(email);
+            for (OrderEntity order : userOrders) {
+                orderItemRepository.deleteByOrderId(order.getId());
+            }
+
+            // 2. ลบ orders
+            orderRepository.deleteByEmail(email);
+
+            // 3. ลบ cart (raw SQL เพราะใช้ tb_cart)
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement stmt = conn.prepareStatement("DELETE FROM tb_cart WHERE email = ?")) {
+                stmt.setString(1, email);
+                stmt.executeUpdate();
+            }
+
+            // 4. ลบ favorites
+            favoriteRepository.deleteByUserId(id);
+
+            // 5. ลบ profile
             userProfileRepository.deleteByUserId(id);
+
+            // 6. ลบ user
             userRepository.deleteById(id);
 
             response.put("success", true);
-            response.put("message", "ลบผู้ใช้สำเร็จ");
+            response.put("message", "ลบบัญชีสำเร็จ");
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
+            e.printStackTrace();
             response.put("success", false);
-            response.put("message", "เกิดข้อผิดพลาด");
+            response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
             return ResponseEntity.internalServerError().body(response);
         }
     }
