@@ -20,4 +20,6 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
     List<OrderEntity> findByPaymentStatus(String paymentStatus);
 
     Optional<OrderEntity> findByOrdCode(String ordCode);
+
+    void deleteByEmail(String email);
 }
