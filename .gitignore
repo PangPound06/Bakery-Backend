@@ -18,7 +18,7 @@ target/
 *.iws
 *.iml
 *.ipr
-git status
+
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
