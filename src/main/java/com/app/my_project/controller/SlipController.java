@@ -32,10 +32,9 @@ public class SlipController {
     @PostConstruct
     public void init() {
         cloudinary = new Cloudinary(ObjectUtils.asMap(
-            "cloud_name", cloudName,
-            "api_key", apiKey,
-            "api_secret", apiSecret
-        ));
+                "cloud_name", cloudName,
+                "api_key", apiKey,
+                "api_secret", apiSecret));
     }
 
     // อัพโหลดสลิปไป Cloudinary
@@ -71,10 +70,9 @@ public class SlipController {
 
             @SuppressWarnings("unchecked")
             Map<String, Object> uploadResult = cloudinary.uploader().upload(file.getBytes(), ObjectUtils.asMap(
-                "public_id", publicId,
-                "folder", "bakery",
-                "resource_type", "image"
-            ));
+                    "public_id", publicId,
+                    "folder", "bakery",
+                    "resource_type", "image"));
 
             String secureUrl = (String) uploadResult.get("secure_url");
 
@@ -94,58 +92,102 @@ public class SlipController {
         }
     }
 
-    // ตรวจสอบสลิปด้วย SlipOK API
     @PostMapping("/verify")
-    public ResponseEntity<?> verifySlip(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<?> verifySlip(
+            @RequestParam("file") MultipartFile file) {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
-            headers.setContentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA);
-            headers.set("x-authorization", "SLIPOKFF0YNF6");
+            // อ่าน QR Code จากรูปสลิปด้วย ZXing (มีใน pom.xml แล้ว)
+            javax.imageio.ImageIO.setUseCache(false);
+            java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(file.getInputStream());
 
-            org.springframework.util.MultiValueMap<String, Object> body = new org.springframework.util.LinkedMultiValueMap<>();
-            body.add("files", new org.springframework.core.io.ByteArrayResource(file.getBytes()) {
-                @Override
-                public String getFilename() {
-                    return file.getOriginalFilename();
-                }
-            });
-
-            org.springframework.http.HttpEntity<org.springframework.util.MultiValueMap<String, Object>> requestEntity =
-                new org.springframework.http.HttpEntity<>(body, headers);
-
-            org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
-            org.springframework.http.ResponseEntity<Map> slipResponse = restTemplate.postForEntity(
-                "https://api.slipok.com/api/line/apikey/27255",
-                requestEntity,
-                Map.class
-            );
-
-            Map slipData = slipResponse.getBody();
-            System.out.println("✅ SlipOK response: " + slipData);
-
-            if (slipData != null && Boolean.TRUE.equals(slipData.get("success"))) {
-                Map data = (Map) slipData.get("data");
-                if (data != null) {
-                    Map amountData = (Map) data.get("amount");
-                    Double amount = amountData != null ? Double.parseDouble(amountData.get("amount").toString()) : null;
-
-                    response.put("success", true);
-                    response.put("amount", amount);
-                    return ResponseEntity.ok(response);
-                }
+            if (image == null) {
+                response.put("success", false);
+                response.put("message", "ไม่สามารถอ่านรูปภาพได้");
+                return ResponseEntity.ok(response);
             }
 
-            response.put("success", false);
-            response.put("message", "ไม่สามารถอ่านสลิปได้");
+            com.google.zxing.LuminanceSource source = new com.google.zxing.client.j2se.BufferedImageLuminanceSource(
+                    image);
+            com.google.zxing.BinaryBitmap bitmap = new com.google.zxing.BinaryBitmap(
+                    new com.google.zxing.common.HybridBinarizer(source));
+
+            // ตั้งค่าให้อ่าน QR Code ได้แม่นขึ้น
+            java.util.Map<com.google.zxing.DecodeHintType, Object> hints = new java.util.HashMap<>();
+            hints.put(com.google.zxing.DecodeHintType.TRY_HARDER, Boolean.TRUE);
+            hints.put(com.google.zxing.DecodeHintType.POSSIBLE_FORMATS,
+                    java.util.Arrays.asList(com.google.zxing.BarcodeFormat.QR_CODE));
+
+            com.google.zxing.Result qrResult = new com.google.zxing.MultiFormatReader().decode(bitmap, hints);
+            String qrData = qrResult.getText();
+
+            System.out.println("✅ QR Data from slip: " + qrData);
+
+            // ดึงยอดเงินจาก QR Data
+            // สลิปธนาคารไทยจะมี format: |amount| หรือตัวเลขทศนิยม 2 ตำแหน่ง
+            Double amount = extractAmountFromQR(qrData);
+
+            if (amount != null) {
+                System.out.println("✅ Amount from QR: " + amount);
+                response.put("success", true);
+                response.put("amount", amount);
+            } else {
+                System.out.println("⚠️ Could not extract amount from QR data");
+                response.put("success", false);
+                response.put("message", "ไม่สามารถอ่านยอดเงินจาก QR Code ได้");
+            }
+
             return ResponseEntity.ok(response);
 
+        } catch (com.google.zxing.NotFoundException e) {
+            response.put("success", false);
+            response.put("message", "ไม่พบ QR Code ในสลิป");
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
             e.printStackTrace();
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
             return ResponseEntity.ok(response);
+        }
+    }
+
+    // ดึงยอดเงินจาก QR Code data ของสลิปธนาคารไทย
+    private Double extractAmountFromQR(String qrData) {
+        try {
+            // Pattern 1: PromptPay slip format มี field ยอดเงิน
+            // QR data มักมีรูปแบบ: ...Amount=100.00... หรือ ...54XX (tag 54 = amount ใน
+            // EMV)
+
+            // EMV QR Code: tag 54 = Transaction Amount
+            java.util.regex.Pattern emvPattern = java.util.regex.Pattern.compile("54(\\d{2})(\\d+\\.?\\d*)");
+            java.util.regex.Matcher emvMatcher = emvPattern.matcher(qrData);
+            if (emvMatcher.find()) {
+                String amountStr = emvMatcher.group(2);
+                return Double.parseDouble(amountStr);
+            }
+
+            // Pattern 2: ตัวเลขทศนิยม 2 ตำแหน่งทั่วไป
+            java.util.regex.Pattern amountPattern = java.util.regex.Pattern.compile("(\\d{1,7}\\.\\d{2})");
+            java.util.regex.Matcher amountMatcher = amountPattern.matcher(qrData);
+
+            java.util.List<Double> amounts = new java.util.ArrayList<>();
+            while (amountMatcher.find()) {
+                double val = Double.parseDouble(amountMatcher.group(1));
+                if (val > 0 && val < 1000000) {
+                    amounts.add(val);
+                }
+            }
+
+            // คืนค่ายอดเงินที่พบ (ตัวแรกที่สมเหตุสมผล)
+            if (!amounts.isEmpty()) {
+                return amounts.get(0);
+            }
+
+            return null;
+        } catch (Exception e) {
+            System.out.println("⚠️ Error extracting amount: " + e.getMessage());
+            return null;
         }
     }
 }
