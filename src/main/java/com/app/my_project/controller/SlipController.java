@@ -93,4 +93,59 @@ public class SlipController {
             return ResponseEntity.badRequest().body(response);
         }
     }
+
+    // ตรวจสอบสลิปด้วย SlipOK API
+    @PostMapping("/verify")
+    public ResponseEntity<?> verifySlip(@RequestParam("file") MultipartFile file) {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.setContentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA);
+            headers.set("x-authorization", "SLIPOKFF0YNF6");
+
+            org.springframework.util.MultiValueMap<String, Object> body = new org.springframework.util.LinkedMultiValueMap<>();
+            body.add("files", new org.springframework.core.io.ByteArrayResource(file.getBytes()) {
+                @Override
+                public String getFilename() {
+                    return file.getOriginalFilename();
+                }
+            });
+
+            org.springframework.http.HttpEntity<org.springframework.util.MultiValueMap<String, Object>> requestEntity =
+                new org.springframework.http.HttpEntity<>(body, headers);
+
+            org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
+            org.springframework.http.ResponseEntity<Map> slipResponse = restTemplate.postForEntity(
+                "https://api.slipok.com/api/line/apikey/27255",
+                requestEntity,
+                Map.class
+            );
+
+            Map slipData = slipResponse.getBody();
+            System.out.println("✅ SlipOK response: " + slipData);
+
+            if (slipData != null && Boolean.TRUE.equals(slipData.get("success"))) {
+                Map data = (Map) slipData.get("data");
+                if (data != null) {
+                    Map amountData = (Map) data.get("amount");
+                    Double amount = amountData != null ? Double.parseDouble(amountData.get("amount").toString()) : null;
+
+                    response.put("success", true);
+                    response.put("amount", amount);
+                    return ResponseEntity.ok(response);
+                }
+            }
+
+            response.put("success", false);
+            response.put("message", "ไม่สามารถอ่านสลิปได้");
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            response.put("success", false);
+            response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
+            return ResponseEntity.ok(response);
+        }
+    }
 }
