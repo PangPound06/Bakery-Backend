@@ -32,7 +32,7 @@ import java.util.UUID;
  * // URL สำหรับเข้าถึงรูปภาพ
  * 
  * @Value(
- * "${upload.base-url:http://localhost:8080/uploads/images}")
+ * "${upload.base-url:${process.env.NEXT_PUBLIC_API_URL}/uploads/images}")
  * private String baseUrl;
  * 
  * // Upload รูปภาพ POST /api/upload/image
