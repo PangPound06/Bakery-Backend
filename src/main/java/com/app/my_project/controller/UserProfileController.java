@@ -7,18 +7,23 @@ import com.app.my_project.repository.UserRepository;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
 
-import com.cloudinary.Cloudinary;
-import com.cloudinary.utils.ObjectUtils;
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.JWTVerifier;
+import com.auth0.jwt.algorithms.Algorithm;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
+
 @RestController
 @RequestMapping("/api/profile")
-@CrossOrigin(origins = "https://poundbakery.vercel.app")
+@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class UserProfileController {
 
     @Autowired
@@ -26,6 +31,9 @@ public class UserProfileController {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Value("${jwt.secret}")
+    private String jwtSecret;
 
     @Value("${cloudinary.cloud-name}")
     private String cloudName;
@@ -43,140 +51,145 @@ public class UserProfileController {
                 "api_secret", apiSecret));
     }
 
-    // ดึง Profile ของ User
-    @GetMapping("/{userId}")
-    public ResponseEntity<?> getProfile(@PathVariable Long userId) {
-        Map<String, Object> response = new HashMap<>();
-
-        // ✅ ดึง User ก่อนเพื่อเอา Email
-        Optional<UserEntity> userOpt = userRepository.findById(userId);
-        if (userOpt.isEmpty()) {
-            response.put("success", false);
-            response.put("message", "ไม่พบผู้ใช้");
-            return ResponseEntity.badRequest().body(response);
+    // ✅ Helper: decode JWT → ได้ userId
+    private Long getUserIdFromToken(String authHeader) {
+        try {
+            if (authHeader == null || !authHeader.startsWith("Bearer "))
+                return null;
+            String token = authHeader.replace("Bearer ", "");
+            JWTVerifier verifier = JWT.require(Algorithm.HMAC256(jwtSecret)).build();
+            String subject = verifier.verify(token).getSubject();
+            return Long.parseLong(subject);
+        } catch (Exception e) {
+            return null;
         }
+    }
+
+    // ✅ Helper: ดึงหรือสร้าง profile จาก userId
+    private UserProfileEntity getOrCreateProfile(Long userId) {
+        Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
+        if (profileOpt.isPresent())
+            return profileOpt.get();
+
+        Optional<UserEntity> userOpt = userRepository.findById(userId);
+        if (userOpt.isEmpty())
+            return null;
 
         UserEntity user = userOpt.get();
 
-        // ✅ ค้นหา Profile จาก userId ก่อน
-        Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
-        if (profileOpt.isPresent()) {
-            response.put("success", true);
-            response.put("profile", profileOpt.get());
-            return ResponseEntity.ok(response);
-        }
-
-        // ✅ ถ้าไม่มี → เช็คจาก Email (กรณี Profile เก่าค้างอยู่)
         Optional<UserProfileEntity> profileByEmail = userProfileRepository.findByEmail(user.getEmail());
         if (profileByEmail.isPresent()) {
-            // อัปเดต userId ให้ตรง
             UserProfileEntity profile = profileByEmail.get();
             profile.setUserId(userId);
-            userProfileRepository.save(profile);
-            response.put("success", true);
-            response.put("profile", profile);
-            return ResponseEntity.ok(response);
+            return userProfileRepository.save(profile);
         }
 
-        // สร้างใหม่
         UserProfileEntity profile = new UserProfileEntity();
         profile.setUserId(userId);
         profile.setFullname(user.getFullname());
         profile.setEmail(user.getEmail());
         profile.setProfileImage(user.getProfileImage());
-        userProfileRepository.save(profile);
+        return userProfileRepository.save(profile);
+    }
+
+    private Map<String, Object> toSafeProfile(UserProfileEntity profile) {
+        Map<String, Object> safe = new HashMap<>();
+        safe.put("fullname", profile.getFullname());
+        safe.put("email", profile.getEmail());
+        safe.put("phone", profile.getPhone());
+        safe.put("address", profile.getAddress());
+        safe.put("profileImage", profile.getProfileImage());
+        safe.put("updatedAt", profile.getUpdatedAt());
+        return safe;
+    }
+
+    // GET /api/profile/me
+    @GetMapping("/me")
+    public ResponseEntity<?> getMyProfile(@RequestHeader("Authorization") String authHeader) {
+        Map<String, Object> response = new HashMap<>();
+        Long userId = getUserIdFromToken(authHeader);
+        if (userId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+
+        UserProfileEntity profile = getOrCreateProfile(userId);
+        if (profile == null)
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "ไม่พบผู้ใช้"));
 
         response.put("success", true);
-        response.put("profile", profile);
+        response.put("profile", toSafeProfile(profile)); // ✅ ซ่อน id และ userId
         return ResponseEntity.ok(response);
     }
 
-    // อัพเดท Profile
-    @PutMapping("/{userId}")
-    public ResponseEntity<?> updateProfile(
-            @PathVariable Long userId,
+    // PUT /api/profile/me
+    @PutMapping("/me")
+    public ResponseEntity<?> updateMyProfile(
+            @RequestHeader("Authorization") String authHeader,
             @RequestBody Map<String, String> request) {
         Map<String, Object> response = new HashMap<>();
+        Long userId = getUserIdFromToken(authHeader);
+        if (userId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
 
         try {
-            UserProfileEntity profile;
-            Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
+            UserProfileEntity profile = getOrCreateProfile(userId);
+            if (profile == null)
+                return ResponseEntity.badRequest()
+                        .body(Map.of("success", false, "message", "ไม่พบผู้ใช้"));
 
-            if (profileOpt.isPresent()) {
-                profile = profileOpt.get();
-            } else {
-                // สร้างใหม่ถ้ายังไม่มี
-                profile = new UserProfileEntity();
-                profile.setUserId(userId);
-
-                Optional<UserEntity> userOpt = userRepository.findById(userId);
-                if (userOpt.isPresent()) {
-                    profile.setEmail(userOpt.get().getEmail());
-                }
-            }
-
-            // อัพเดทข้อมูล
             if (request.containsKey("fullname")) {
                 profile.setFullname(request.get("fullname"));
-
-                // อัพเดทชื่อใน tb_userregister ด้วย
-                Optional<UserEntity> userOpt = userRepository.findById(userId);
-                if (userOpt.isPresent()) {
-                    UserEntity user = userOpt.get();
+                userRepository.findById(userId).ifPresent(user -> {
                     user.setFullname(request.get("fullname"));
                     userRepository.save(user);
-                }
+                });
             }
-            if (request.containsKey("phone")) {
+            if (request.containsKey("phone"))
                 profile.setPhone(request.get("phone"));
-            }
-            if (request.containsKey("address")) {
+            if (request.containsKey("address"))
                 profile.setAddress(request.get("address"));
-            }
 
             userProfileRepository.save(profile);
 
             response.put("success", true);
             response.put("message", "บันทึกข้อมูลสำเร็จ");
-            response.put("profile", profile);
+            response.put("profile", toSafeProfile(profile)); // ✅ ซ่อน id และ userId
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
             e.printStackTrace();
-            response.put("success", false);
-            response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
-            return ResponseEntity.badRequest().body(response);
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "เกิดข้อผิดพลาด: " + e.getMessage()));
         }
     }
 
-    // อัปโหลดรูปโปรไฟล์
-    @PostMapping("/{userId}/image")
-    public ResponseEntity<?> uploadProfileImage(
-            @PathVariable Long userId,
+    // POST /api/profile/me/image
+    @PostMapping("/me/image")
+    public ResponseEntity<?> uploadMyProfileImage(
+            @RequestHeader("Authorization") String authHeader,
             @RequestParam("file") MultipartFile file) {
-
         Map<String, Object> response = new HashMap<>();
+        Long userId = getUserIdFromToken(authHeader);
+        if (userId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
 
         try {
             byte[] bytes = file.getBytes();
-
             @SuppressWarnings("unchecked")
             Map<String, Object> uploadResult = getCloudinary().uploader().upload(
                     bytes,
-                    ObjectUtils.asMap(
-                            "folder", "bakery/profiles",
-                            "public_id", "profile_" + userId,
-                            "overwrite", true));
+                    ObjectUtils.asMap("folder", "bakery/profiles", "public_id", "profile_" + userId, "overwrite",
+                            true));
 
             String imageUrl = (String) uploadResult.get("secure_url");
 
-            // อัปเดตใน tb_user_profile
-            Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
-            if (profileOpt.isPresent()) {
-                UserProfileEntity profile = profileOpt.get();
+            userProfileRepository.findByUserId(userId).ifPresent(profile -> {
                 profile.setProfileImage(imageUrl);
                 userProfileRepository.save(profile);
-            }
+            });
 
             response.put("success", true);
             response.put("url", imageUrl);
@@ -184,39 +197,167 @@ public class UserProfileController {
 
         } catch (Exception e) {
             e.printStackTrace();
-            response.put("success", false);
-            response.put("message", "อัปโหลดไม่สำเร็จ: " + e.getMessage());
-            return ResponseEntity.badRequest().body(response);
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "อัปโหลดไม่สำเร็จ: " + e.getMessage()));
         }
     }
 
-    // ลบรูปโปรไฟล์
-    @DeleteMapping("/{userId}/image")
-    public ResponseEntity<?> deleteProfileImage(@PathVariable Long userId) {
+    // DELETE /api/profile/me/image
+    @DeleteMapping("/me/image")
+    public ResponseEntity<?> deleteMyProfileImage(@RequestHeader("Authorization") String authHeader) {
         Map<String, Object> response = new HashMap<>();
+        Long userId = getUserIdFromToken(authHeader);
+        if (userId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
 
         try {
-            Optional<UserProfileEntity> profileOpt = userProfileRepository.findByUserId(userId);
-            if (profileOpt.isPresent()) {
-                UserProfileEntity profile = profileOpt.get();
-
-                // ลบจาก Cloudinary
-                String publicId = "bakery/profiles/profile_" + userId;
-                getCloudinary().uploader().destroy(publicId, ObjectUtils.emptyMap());
-
-                // เคลียร์ URL ในฐานข้อมูล
+            userProfileRepository.findByUserId(userId).ifPresent(profile -> {
+                try {
+                    getCloudinary().uploader().destroy("bakery/profiles/profile_" + userId, ObjectUtils.emptyMap());
+                } catch (Exception ignored) {
+                }
                 profile.setProfileImage(null);
                 userProfileRepository.save(profile);
-            }
+            });
 
             response.put("success", true);
             response.put("message", "ลบรูปภาพสำเร็จ");
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            response.put("success", false);
-            response.put("message", e.getMessage());
-            return ResponseEntity.badRequest().body(response);
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", e.getMessage()));
+        }
+    }
+
+    // OLD endpoints — backward compatibility
+    @GetMapping("/{userId}")
+    public ResponseEntity<?> getProfile(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long userId) {
+        Long tokenUserId = getUserIdFromToken(authHeader);
+        if (tokenUserId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!tokenUserId.equals(userId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึงข้อมูลนี้"));
+
+        Map<String, Object> response = new HashMap<>();
+        if (userRepository.findById(userId).isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "ไม่พบผู้ใช้"));
+
+        UserProfileEntity profile = getOrCreateProfile(userId);
+        response.put("success", true);
+        response.put("profile", toSafeProfile(profile));
+        return ResponseEntity.ok(response);
+    }
+
+    @PutMapping("/{userId}")
+    public ResponseEntity<?> updateProfile(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long userId,
+            @RequestBody Map<String, String> request) {
+        Long tokenUserId = getUserIdFromToken(authHeader);
+        if (tokenUserId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!tokenUserId.equals(userId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์แก้ไขข้อมูลนี้"));
+
+        Map<String, Object> response = new HashMap<>();
+        try {
+            UserProfileEntity profile = getOrCreateProfile(userId);
+            if (profile == null)
+                return ResponseEntity.badRequest().body(Map.of("success", false, "message", "ไม่พบผู้ใช้"));
+
+            if (request.containsKey("fullname")) {
+                profile.setFullname(request.get("fullname"));
+                userRepository.findById(userId).ifPresent(user -> {
+                    user.setFullname(request.get("fullname"));
+                    userRepository.save(user);
+                });
+            }
+            if (request.containsKey("phone"))
+                profile.setPhone(request.get("phone"));
+            if (request.containsKey("address"))
+                profile.setAddress(request.get("address"));
+            userProfileRepository.save(profile);
+
+            response.put("success", true);
+            response.put("message", "บันทึกข้อมูลสำเร็จ");
+            response.put("profile", toSafeProfile(profile));
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "เกิดข้อผิดพลาด"));
+        }
+    }
+
+    @PostMapping("/{userId}/image")
+    public ResponseEntity<?> uploadProfileImage(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long userId,
+            @RequestParam("file") MultipartFile file) {
+        Long tokenUserId = getUserIdFromToken(authHeader);
+        if (tokenUserId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!tokenUserId.equals(userId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์อัปโหลดรูปนี้"));
+
+        Map<String, Object> response = new HashMap<>();
+        try {
+            byte[] bytes = file.getBytes();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> uploadResult = getCloudinary().uploader().upload(
+                    bytes, ObjectUtils.asMap("folder", "bakery/profiles", "public_id", "profile_" + userId, "overwrite",
+                            true));
+            String imageUrl = (String) uploadResult.get("secure_url");
+            userProfileRepository.findByUserId(userId).ifPresent(profile -> {
+                profile.setProfileImage(imageUrl);
+                userProfileRepository.save(profile);
+            });
+            response.put("success", true);
+            response.put("url", imageUrl);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "อัปโหลดไม่สำเร็จ"));
+        }
+    }
+
+    @DeleteMapping("/{userId}/image")
+    public ResponseEntity<?> deleteProfileImage(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long userId) {
+        Long tokenUserId = getUserIdFromToken(authHeader);
+        if (tokenUserId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!tokenUserId.equals(userId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์ลบรูปนี้"));
+
+        Map<String, Object> response = new HashMap<>();
+        try {
+            userProfileRepository.findByUserId(userId).ifPresent(profile -> {
+                try {
+                    getCloudinary().uploader().destroy("bakery/profiles/profile_" + userId, ObjectUtils.emptyMap());
+                } catch (Exception ignored) {
+                }
+                profile.setProfileImage(null);
+                userProfileRepository.save(profile);
+            });
+            response.put("success", true);
+            response.put("message", "ลบรูปภาพสำเร็จ");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", e.getMessage()));
         }
     }
 }

@@ -17,10 +17,11 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 
 @RestController
 @RequestMapping("/api/admin")
-@CrossOrigin(origins = "https://poundbakery.vercel.app")
+@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class AdminAuthController {
 
     @Autowired
@@ -41,6 +42,24 @@ public class AdminAuthController {
                 .withSubject(adminId.toString())
                 .withIssuer("auth0")
                 .sign(algorithm);
+    }
+
+    // ✅ Helper: decode JWT → ได้ adminId
+    private Long getAdminIdFromToken(String authHeader) {
+        try {
+            if (authHeader == null || !authHeader.startsWith("Bearer "))
+                return null;
+            String token = authHeader.replace("Bearer ", "");
+            return Long.parseLong(
+                    JWT.require(Algorithm.HMAC256(jwtSecret)).build().verify(token).getSubject());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // ✅ Helper: ตรวจว่าเป็น Admin จริงไหม
+    private boolean isAdmin(Long userId) {
+        return adminRepository.findById(userId).isPresent();
     }
 
     // LOGIN ADMIN - สำหรับ Admin โดยเฉพาะ
@@ -102,9 +121,19 @@ public class AdminAuthController {
         return ResponseEntity.badRequest().body(response);
     }
 
-    // REGISTER ADMIN - เพิ่ม Admin ใหม่
+    // REGISTER ADMIN — ✅ ต้องเป็น Admin เท่านั้น
     @PostMapping("/register")
-    public ResponseEntity<?> registerAdmin(@RequestBody Map<String, String> request) {
+    public ResponseEntity<?> registerAdmin(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody Map<String, String> request) {
+        Long tokenAdminId = getAdminIdFromToken(authHeader);
+        if (tokenAdminId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!isAdmin(tokenAdminId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
+
         Map<String, Object> response = new HashMap<>();
         String email = request.get("email");
         String password = request.get("password");
@@ -116,14 +145,11 @@ public class AdminAuthController {
             response.put("message", "กรุณากรอกอีเมลและรหัสผ่าน");
             return ResponseEntity.badRequest().body(response);
         }
-
         if (password.length() < 6) {
             response.put("success", false);
             response.put("message", "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร");
             return ResponseEntity.badRequest().body(response);
         }
-
-        // ตรวจสอบว่า email ต้องลงท้ายด้วย @empbakery.com
         if (!email.toLowerCase().endsWith("@empbakery.com")) {
             response.put("success", false);
             response.put("message", "อีเมล Admin ต้องลงท้ายด้วย @empbakery.com");
@@ -132,7 +158,6 @@ public class AdminAuthController {
 
         email = email.trim().toLowerCase();
 
-        // ตรวจสอบว่า email ซ้ำไหม
         if (adminRepository.existsByEmail(email) || userRepository.existsByEmail(email)) {
             response.put("success", false);
             response.put("message", "อีเมลนี้ถูกใช้งานแล้ว");
@@ -151,7 +176,6 @@ public class AdminAuthController {
             response.put("success", true);
             response.put("message", "เพิ่ม Admin สำเร็จ");
 
-            // ส่งข้อมูล admin กลับไป (ไม่รวม password)
             Map<String, Object> adminData = new HashMap<>();
             adminData.put("id", admin.getId());
             adminData.put("email", admin.getEmail());
@@ -161,7 +185,6 @@ public class AdminAuthController {
             response.put("admin", adminData);
 
             return ResponseEntity.ok(response);
-
         } catch (Exception e) {
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด กรุณาลองใหม่");
@@ -169,9 +192,18 @@ public class AdminAuthController {
         }
     }
 
-    // GET ALL ADMINS
+    // GET ALL ADMINS — ✅ เฉพาะ Admin
     @GetMapping("/list")
-    public ResponseEntity<?> getAllAdmins() {
+    public ResponseEntity<?> getAllAdmins(
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        Long tokenAdminId = getAdminIdFromToken(authHeader);
+        if (tokenAdminId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!isAdmin(tokenAdminId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
+
         return ResponseEntity.ok(
                 adminRepository.findAll().stream().map(admin -> {
                     Map<String, Object> a = new HashMap<>();
@@ -184,11 +216,20 @@ public class AdminAuthController {
                 }).toList());
     }
 
-    // GET ADMIN BY ID
+    // GET ADMIN BY ID — ✅ เฉพาะ Admin
     @GetMapping("/{id}")
-    public ResponseEntity<?> getAdminById(@PathVariable Long id) {
-        Map<String, Object> response = new HashMap<>();
+    public ResponseEntity<?> getAdminById(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long id) {
+        Long tokenAdminId = getAdminIdFromToken(authHeader);
+        if (tokenAdminId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!isAdmin(tokenAdminId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
+        Map<String, Object> response = new HashMap<>();
         Optional<AdminEntity> adminOptional = adminRepository.findById(id);
         if (adminOptional.isEmpty()) {
             response.put("success", false);
@@ -209,11 +250,21 @@ public class AdminAuthController {
         return ResponseEntity.ok(response);
     }
 
-    // UPDATE ADMIN
+    // UPDATE ADMIN — ✅ เฉพาะ Admin
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateAdmin(@PathVariable Long id, @RequestBody Map<String, String> request) {
-        Map<String, Object> response = new HashMap<>();
+    public ResponseEntity<?> updateAdmin(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long id,
+            @RequestBody Map<String, String> request) {
+        Long tokenAdminId = getAdminIdFromToken(authHeader);
+        if (tokenAdminId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!isAdmin(tokenAdminId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
+        Map<String, Object> response = new HashMap<>();
         Optional<AdminEntity> adminOptional = adminRepository.findById(id);
         if (adminOptional.isEmpty()) {
             response.put("success", false);
@@ -223,20 +274,14 @@ public class AdminAuthController {
 
         try {
             AdminEntity admin = adminOptional.get();
-
-            if (request.containsKey("fullname")) {
+            if (request.containsKey("fullname"))
                 admin.setFullname(request.get("fullname"));
-            }
-            if (request.containsKey("role")) {
+            if (request.containsKey("role"))
                 admin.setRole(request.get("role"));
-            }
-            if (request.containsKey("status")) {
+            if (request.containsKey("status"))
                 admin.setStatus(request.get("status"));
-            }
-            if (request.containsKey("password") && !request.get("password").isEmpty()) {
+            if (request.containsKey("password") && !request.get("password").isEmpty())
                 admin.setPassword(passwordEncoder.encode(request.get("password")));
-            }
-
             adminRepository.save(admin);
 
             response.put("success", true);
@@ -249,9 +294,7 @@ public class AdminAuthController {
             adminData.put("role", admin.getRole());
             adminData.put("status", admin.getStatus());
             response.put("admin", adminData);
-
             return ResponseEntity.ok(response);
-
         } catch (Exception e) {
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด");
@@ -259,13 +302,20 @@ public class AdminAuthController {
         }
     }
 
-    // ============================================================
-    // TOGGLE ADMIN STATUS (Active/Inactive)
-    // ============================================================
+    // TOGGLE ADMIN STATUS — ✅ เฉพาะ Admin
     @PutMapping("/{id}/toggle-status")
-    public ResponseEntity<?> toggleAdminStatus(@PathVariable Long id) {
-        Map<String, Object> response = new HashMap<>();
+    public ResponseEntity<?> toggleAdminStatus(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long id) {
+        Long tokenAdminId = getAdminIdFromToken(authHeader);
+        if (tokenAdminId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!isAdmin(tokenAdminId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
+        Map<String, Object> response = new HashMap<>();
         Optional<AdminEntity> adminOptional = adminRepository.findById(id);
         if (adminOptional.isEmpty()) {
             response.put("success", false);
@@ -283,7 +333,6 @@ public class AdminAuthController {
             response.put("message", "เปลี่ยนสถานะเป็น " + newStatus + " สำเร็จ");
             response.put("status", newStatus);
             return ResponseEntity.ok(response);
-
         } catch (Exception e) {
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด");
@@ -291,11 +340,20 @@ public class AdminAuthController {
         }
     }
 
-    // DELETE ADMIN
+    // DELETE ADMIN — ✅ เฉพาะ Admin
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteAdmin(@PathVariable Long id) {
-        Map<String, Object> response = new HashMap<>();
+    public ResponseEntity<?> deleteAdmin(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long id) {
+        Long tokenAdminId = getAdminIdFromToken(authHeader);
+        if (tokenAdminId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!isAdmin(tokenAdminId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
+        Map<String, Object> response = new HashMap<>();
         if (!adminRepository.existsById(id)) {
             response.put("success", false);
             response.put("message", "ไม่พบ Admin");
@@ -307,7 +365,6 @@ public class AdminAuthController {
             response.put("success", true);
             response.put("message", "ลบ Admin สำเร็จ");
             return ResponseEntity.ok(response);
-
         } catch (Exception e) {
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด");

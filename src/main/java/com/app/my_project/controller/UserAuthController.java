@@ -11,10 +11,12 @@ import com.app.my_project.repository.OrderRepository;
 import com.app.my_project.repository.UserProfileRepository;
 
 import com.auth0.jwt.JWT;
+import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.algorithms.Algorithm;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
@@ -44,8 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @RestController
 @RequestMapping("/api/auth")
-// @CrossOrigin(origins = "*")
-@CrossOrigin(origins = "https://poundbakery.vercel.app")
+@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class UserAuthController {
 
     @Autowired
@@ -93,6 +94,24 @@ public class UserAuthController {
                 .withSubject(userId.toString())
                 .withIssuer("auth0")
                 .sign(algorithm);
+    }
+
+    // ✅ Helper: decode JWT → ได้ userId
+    private Long getUserIdFromToken(String authHeader) {
+        try {
+            if (authHeader == null || !authHeader.startsWith("Bearer "))
+                return null;
+            String token = authHeader.replace("Bearer ", "");
+            JWTVerifier verifier = JWT.require(Algorithm.HMAC256(jwtSecret)).build();
+            return Long.parseLong(verifier.verify(token).getSubject());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // ✅ Helper: ตรวจว่าเป็น Admin หรือไม่
+    private boolean isAdmin(Long userId) {
+        return adminRepository.findById(userId).isPresent();
     }
 
     // LOGIN
@@ -151,7 +170,7 @@ public class UserAuthController {
                 response.put("message", "เข้าสู่ระบบสำเร็จ");
                 response.put("token", token);
                 response.put("userType", "user");
-                response.put("redirectUrl", "/");
+                response.put("redirectUrl", "/order-mode");
 
                 Map<String, Object> userData = new HashMap<>();
                 userData.put("id", user.getId());
@@ -191,7 +210,6 @@ public class UserAuthController {
             @RequestParam(value = "error", required = false) String error,
             HttpServletResponse httpResponse) throws Exception {
 
-        // ✅ ผู้ใช้กดยกเลิก → redirect กลับหน้า login
         if (error != null || code == null) {
             httpResponse.sendRedirect(frontendUrl + "/login");
             return;
@@ -281,7 +299,8 @@ public class UserAuthController {
                     + URLEncoder.encode(user.getProfileImage() != null ? user.getProfileImage() : "",
                             StandardCharsets.UTF_8)
                     + "&authProvider=" + URLEncoder.encode(
-                            user.getAuthProvider() != null ? user.getAuthProvider() : "google", StandardCharsets.UTF_8);
+                            user.getAuthProvider() != null ? user.getAuthProvider() : "google",
+                            StandardCharsets.UTF_8);
 
             httpResponse.sendRedirect(redirectUrl);
 
@@ -345,9 +364,20 @@ public class UserAuthController {
         }
     }
 
-    // GET ALL USERS
+    // ✅ GET ALL USERS — เฉพาะ Admin เท่านั้น
     @GetMapping("/users")
-    public ResponseEntity<?> getAllUsers() {
+    public ResponseEntity<?> getAllUsers(
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+
+        Long tokenUserId = getUserIdFromToken(authHeader);
+        if (tokenUserId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+
+        if (!isAdmin(tokenUserId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
+
         return ResponseEntity.ok(
                 userRepository.findAll().stream().map(user -> {
                     Map<String, Object> u = new HashMap<>();
@@ -358,10 +388,22 @@ public class UserAuthController {
                 }).toList());
     }
 
-    // GET USER BY ID
+    // ✅ GET USER BY ID — ดูได้เฉพาะข้อมูลตัวเอง หรือ Admin
     @GetMapping("/user/{id}")
-    public ResponseEntity<?> getUserById(@PathVariable Long id) {
+    public ResponseEntity<?> getUserById(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long id) {
         Map<String, Object> response = new HashMap<>();
+
+        Long tokenUserId = getUserIdFromToken(authHeader);
+        if (tokenUserId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+
+        // ✅ ตรวจว่าเป็นเจ้าของ หรือ Admin
+        if (!tokenUserId.equals(id) && !isAdmin(tokenUserId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึงข้อมูลนี้"));
 
         Optional<UserEntity> userOptional = userRepository.findById(id);
         if (userOptional.isEmpty()) {
@@ -383,10 +425,23 @@ public class UserAuthController {
         return ResponseEntity.ok(response);
     }
 
-    // ✅ UPDATE USER — ตรวจสอบรหัสผ่านเดิมก่อนเปลี่ยน
+    // ✅ UPDATE USER — แก้ได้เฉพาะข้อมูลตัวเอง
     @PutMapping("/user/{id}")
-    public ResponseEntity<?> updateUser(@PathVariable Long id, @RequestBody Map<String, String> request) {
+    public ResponseEntity<?> updateUser(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long id,
+            @RequestBody Map<String, String> request) {
         Map<String, Object> response = new HashMap<>();
+
+        Long tokenUserId = getUserIdFromToken(authHeader);
+        if (tokenUserId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+
+        // ✅ ตรวจว่าเป็นเจ้าของเท่านั้น (Admin แก้ข้อมูลตัวเองไม่ได้ผ่าน endpoint นี้)
+        if (!tokenUserId.equals(id))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์แก้ไขข้อมูลนี้"));
 
         Optional<UserEntity> userOptional = userRepository.findById(id);
         if (userOptional.isEmpty()) {
@@ -398,24 +453,20 @@ public class UserAuthController {
         try {
             UserEntity user = userOptional.get();
 
-            // อัพเดทชื่อ
             if (request.containsKey("fullname")) {
                 user.setFullname(request.get("fullname"));
             }
 
-            // ✅ เปลี่ยนรหัสผ่าน — ต้องส่ง currentPassword มาด้วย
             if (request.containsKey("password") && !request.get("password").isEmpty()) {
                 String currentPassword = request.get("currentPassword");
                 String newPassword = request.get("password");
 
-                // ตรวจสอบว่าส่งรหัสผ่านเดิมมาหรือไม่
                 if (currentPassword == null || currentPassword.isEmpty()) {
                     response.put("success", false);
                     response.put("message", "กรุณากรอกรหัสผ่านปัจจุบัน");
                     return ResponseEntity.badRequest().body(response);
                 }
 
-                // ตรวจสอบว่าเป็น Google-only account หรือไม่
                 if ("google".equals(user.getAuthProvider()) &&
                         (user.getPassword() == null || user.getPassword().isEmpty())) {
                     response.put("success", false);
@@ -423,21 +474,18 @@ public class UserAuthController {
                     return ResponseEntity.badRequest().body(response);
                 }
 
-                // ✅ ตรวจสอบรหัสผ่านเดิมว่าถูกต้องหรือไม่
                 if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
                     response.put("success", false);
                     response.put("message", "รหัสผ่านปัจจุบันไม่ถูกต้อง");
                     return ResponseEntity.badRequest().body(response);
                 }
 
-                // ตรวจสอบความยาวรหัสผ่านใหม่
                 if (newPassword.length() < 6) {
                     response.put("success", false);
                     response.put("message", "รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร");
                     return ResponseEntity.badRequest().body(response);
                 }
 
-                // ✅ ผ่านทั้งหมด → เปลี่ยนรหัสผ่าน
                 user.setPassword(passwordEncoder.encode(newPassword));
             }
 
@@ -454,11 +502,23 @@ public class UserAuthController {
         }
     }
 
-    // DELETE USER
+    // ✅ DELETE USER — ลบได้เฉพาะบัญชีตัวเอง หรือ Admin
     @Transactional
     @DeleteMapping("/user/{id}")
-    public ResponseEntity<?> deleteUser(@PathVariable Long id) {
+    public ResponseEntity<?> deleteUser(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long id) {
         Map<String, Object> response = new HashMap<>();
+
+        Long tokenUserId = getUserIdFromToken(authHeader);
+        if (tokenUserId == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+
+        // ✅ ตรวจว่าเป็นเจ้าของ หรือ Admin
+        if (!tokenUserId.equals(id) && !isAdmin(tokenUserId))
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์ลบข้อมูลนี้"));
 
         Optional<UserEntity> userOpt = userRepository.findById(id);
         if (userOpt.isEmpty()) {
@@ -471,29 +531,21 @@ public class UserAuthController {
             UserEntity user = userOpt.get();
             String email = user.getEmail();
 
-            // 1. ลบ order items ของ orders ที่เป็นของ user
             List<OrderEntity> userOrders = orderRepository.findByEmailOrderByCreatedAtDesc(email);
             for (OrderEntity order : userOrders) {
                 orderItemRepository.deleteByOrderId(order.getId());
             }
 
-            // 2. ลบ orders
             orderRepository.deleteByEmail(email);
 
-            // 3. ลบ cart (raw SQL เพราะใช้ tb_cart)
             try (Connection conn = dataSource.getConnection();
                     PreparedStatement stmt = conn.prepareStatement("DELETE FROM tb_cart WHERE email = ?")) {
                 stmt.setString(1, email);
                 stmt.executeUpdate();
             }
 
-            // 4. ลบ favorites
             favoriteRepository.deleteByUserId(id);
-
-            // 5. ลบ profile
             userProfileRepository.deleteByUserId(id);
-
-            // 6. ลบ user
             userRepository.deleteById(id);
 
             response.put("success", true);

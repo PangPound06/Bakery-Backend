@@ -5,14 +5,14 @@ public class CartModel {
     private String email;
     private String productName;
     private Integer quantity;
-    private Integer price;
-    private Integer subtotal;
+    private Double price;
+    private Double subtotal;
     private String category;
     private String image;
 
     // Constructor แบบเต็ม (มี id)
     public CartModel(Integer id, String email, String productName, Integer quantity, 
-                     Integer price, String category, String image) {
+                     Double price, String category, String image) {
         this.id = id;
         this.email = email;
         this.productName = productName;
@@ -25,7 +25,7 @@ public class CartModel {
 
     // Constructor แบบไม่มี id (สำหรับ insert)
     public CartModel(String email, String productName, Integer quantity, 
-                     Integer price, String category, String image) {
+                     Double price, String category, String image) {
         this.email = email;
         this.productName = productName;
         this.quantity = quantity;
@@ -56,11 +56,11 @@ public class CartModel {
         return quantity;
     }
 
-    public Integer getPrice() {
+    public Double getPrice() {
         return price;
     }
 
-    public Integer getSubtotal() {
+    public Double getSubtotal() {
         if (subtotal != null) {
             return subtotal;
         }
@@ -95,14 +95,14 @@ public class CartModel {
         }
     }
 
-    public void setPrice(Integer price) {
+    public void setPrice(Double price) {
         this.price = price;
         if (this.quantity != null) {
             this.subtotal = this.quantity * price;
         }
     }
 
-    public void setSubtotal(Integer subtotal) {
+    public void setSubtotal(Double subtotal) {
         this.subtotal = subtotal;
     }
 

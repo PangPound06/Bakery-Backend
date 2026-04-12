@@ -22,20 +22,23 @@ public class OrderEntity {
     private Double total;
 
     @Column(name = "payment_method")
-    private String paymentMethod; // qr_promptpay, card
+    private String paymentMethod;
 
     @Column(name = "payment_status")
-    private String paymentStatus; // pending, paid, failed
+    private String paymentStatus;
 
     @Column(name = "payment_id")
     private String paymentId;
 
-    // ✅ เพิ่ม field สำหรับเก็บ path สลิป
     @Column(name = "slip_image")
     private String slipImage;
 
     @Column(name = "order_status")
-    private String orderStatus; // pending, confirmed, preparing, shipping, delivered, cancelled
+    private String orderStatus;
+
+    // ✅ NEW — แยกประเภท order
+    @Column(name = "order_type")
+    private String orderType; // "online" | "pos"
 
     @Column(name = "receiver_name")
     private String receiverName;
@@ -58,149 +61,60 @@ public class OrderEntity {
     private String cardLast4;
 
     // ===== Getters and Setters =====
-    public Long getId() {
-        return id;
-    }
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
 
-    public void setId(Long id) {
-        this.id = id;
-    }
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
 
-    public String getEmail() {
-        return email;
-    }
+    public String getOrdCode() { return ordCode; }
+    public void setOrdCode(String ordCode) { this.ordCode = ordCode; }
 
-    public void setEmail(String email) {
-        this.email = email;
-    }
+    public Double getSubtotal() { return subtotal; }
+    public void setSubtotal(Double subtotal) { this.subtotal = subtotal; }
 
-    public Double getSubtotal() {
-        return subtotal;
-    }
+    public Double getShipping() { return shipping; }
+    public void setShipping(Double shipping) { this.shipping = shipping; }
 
-    public void setSubtotal(Double subtotal) {
-        this.subtotal = subtotal;
-    }
+    public Double getTotal() { return total; }
+    public void setTotal(Double total) { this.total = total; }
 
-    public Double getShipping() {
-        return shipping;
-    }
+    public String getPaymentMethod() { return paymentMethod; }
+    public void setPaymentMethod(String paymentMethod) { this.paymentMethod = paymentMethod; }
 
-    public void setShipping(Double shipping) {
-        this.shipping = shipping;
-    }
+    public String getPaymentStatus() { return paymentStatus; }
+    public void setPaymentStatus(String paymentStatus) { this.paymentStatus = paymentStatus; }
 
-    public Double getTotal() {
-        return total;
-    }
+    public String getPaymentId() { return paymentId; }
+    public void setPaymentId(String paymentId) { this.paymentId = paymentId; }
 
-    public void setTotal(Double total) {
-        this.total = total;
-    }
+    public String getSlipImage() { return slipImage; }
+    public void setSlipImage(String slipImage) { this.slipImage = slipImage; }
 
-    public String getPaymentMethod() {
-        return paymentMethod;
-    }
+    public String getOrderStatus() { return orderStatus; }
+    public void setOrderStatus(String orderStatus) { this.orderStatus = orderStatus; }
 
-    public void setPaymentMethod(String paymentMethod) {
-        this.paymentMethod = paymentMethod;
-    }
+    public String getOrderType() { return orderType; }
+    public void setOrderType(String orderType) { this.orderType = orderType; }
 
-    public String getPaymentStatus() {
-        return paymentStatus;
-    }
+    public String getReceiverName() { return receiverName; }
+    public void setReceiverName(String receiverName) { this.receiverName = receiverName; }
 
-    public void setPaymentStatus(String paymentStatus) {
-        this.paymentStatus = paymentStatus;
-    }
+    public String getReceiverPhone() { return receiverPhone; }
+    public void setReceiverPhone(String receiverPhone) { this.receiverPhone = receiverPhone; }
 
-    public String getPaymentId() {
-        return paymentId;
-    }
+    public String getReceiverAddress() { return receiverAddress; }
+    public void setReceiverAddress(String receiverAddress) { this.receiverAddress = receiverAddress; }
 
-    public void setPaymentId(String paymentId) {
-        this.paymentId = paymentId;
-    }
+    public String getNote() { return note; }
+    public void setNote(String note) { this.note = note; }
 
-    // ✅ Getter/Setter สำหรับ slipImage
-    public String getSlipImage() {
-        return slipImage;
-    }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 
-    public void setSlipImage(String slipImage) {
-        this.slipImage = slipImage;
-    }
+    public String getCardName() { return cardName; }
+    public void setCardName(String cardName) { this.cardName = cardName; }
 
-    public String getOrderStatus() {
-        return orderStatus;
-    }
-
-    public void setOrderStatus(String orderStatus) {
-        this.orderStatus = orderStatus;
-    }
-
-    public String getReceiverName() {
-        return receiverName;
-    }
-
-    public void setReceiverName(String receiverName) {
-        this.receiverName = receiverName;
-    }
-
-    public String getReceiverPhone() {
-        return receiverPhone;
-    }
-
-    public void setReceiverPhone(String receiverPhone) {
-        this.receiverPhone = receiverPhone;
-    }
-
-    public String getReceiverAddress() {
-        return receiverAddress;
-    }
-
-    public void setReceiverAddress(String receiverAddress) {
-        this.receiverAddress = receiverAddress;
-    }
-
-    public String getNote() {
-        return note;
-    }
-
-    public void setNote(String note) {
-        this.note = note;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public String getCardName() {
-        return cardName;
-    }
-
-    public void setCardName(String cardName) {
-        this.cardName = cardName;
-    }
-
-    public String getCardLast4() {
-        return cardLast4;
-    }
-
-    public void setCardLast4(String cardLast4) {
-        this.cardLast4 = cardLast4;
-    }
-
-    // Getter/Setter
-    public String getOrdCode() {
-        return ordCode;
-    }
-
-    public void setOrdCode(String ordCode) {
-        this.ordCode = ordCode;
-    }
+    public String getCardLast4() { return cardLast4; }
+    public void setCardLast4(String cardLast4) { this.cardLast4 = cardLast4; }
 }

@@ -18,7 +18,7 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/auth")
-@CrossOrigin(origins = "https://poundbakery.vercel.app")
+@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class PasswordResetController {
 
     @Autowired

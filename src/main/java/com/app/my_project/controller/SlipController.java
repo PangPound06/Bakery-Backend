@@ -15,7 +15,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/slip")
-@CrossOrigin(origins = "https://poundbakery.vercel.app")
+@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class SlipController {
 
     @Value("${cloudinary.cloud-name}")

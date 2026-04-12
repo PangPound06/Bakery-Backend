@@ -3,32 +3,22 @@ package com.app.my_project.entity;
 import jakarta.persistence.*;
 
 @Entity
-@Table(name = "tb_order_items")
-public class OrderItemEntity {
-
+@Table(name = "tb_dinein_order_items")
+public class DineInOrderItemEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
-    @Column(name = "order_id")
     private Long orderId;
-
-    @Column(name = "product_id")
     private Long productId;
-
-    @Column(name = "product_name")
     private String productName;
-
     private Double price;
     private Integer quantity;
-
-    @Column(name = "selected_option")
     private String selectedOption;
-
-    @Column(name = "image") // ✅ เพิ่ม field นี้
+    
+    @Column(length = 2000)
     private String image;
 
-    // ===== Getters and Setters =====
+    // Getters & Setters
     public Long getId() {
         return id;
     }

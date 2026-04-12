@@ -19,7 +19,7 @@ import javax.sql.DataSource;
 
 @RestController
 @RequestMapping("/api/products")
-@CrossOrigin(origins = {"http://localhost:3000", "https://poundbakery.vercel.app"})
+@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class ProductController {
 
     @Value("${jwt.secret}")
@@ -28,17 +28,17 @@ public class ProductController {
     @Autowired
     private DataSource dataSource;
 
-    // ==================== DTO Classes ====================
-
     public static class ProductRequest {
         private String name;
-        private Long price;
+        private Double price;
         private String category;
+        private Long categoryId;
         private String image;
         private String type;
         private String description;
         private Long stockQuantity;
         private Boolean isAvailable;
+        private String options;
 
         public String getName() {
             return name;
@@ -48,11 +48,11 @@ public class ProductController {
             this.name = name;
         }
 
-        public Long getPrice() {
+        public Double getPrice() {
             return price;
         }
 
-        public void setPrice(Long price) {
+        public void setPrice(Double price) {
             this.price = price;
         }
 
@@ -62,6 +62,14 @@ public class ProductController {
 
         public void setCategory(String category) {
             this.category = category;
+        }
+
+        public Long getCategoryId() {
+            return categoryId;
+        }
+
+        public void setCategoryId(Long categoryId) {
+            this.categoryId = categoryId;
         }
 
         public String getImage() {
@@ -103,6 +111,14 @@ public class ProductController {
         public void setIsAvailable(Boolean isAvailable) {
             this.isAvailable = isAvailable;
         }
+
+        public String getOptions() {
+            return options;
+        }
+
+        public void setOptions(String options) {
+            this.options = options;
+        }
     }
 
     public static class ErrorResponse {
@@ -139,10 +155,8 @@ public class ProductController {
         }
     }
 
-    // ==================== Helper Methods ====================
-
     private Algorithm getAlgorithm() {
-    return Algorithm.HMAC256(jwtSecret);
+        return Algorithm.HMAC256(jwtSecret);
     }
 
     private boolean verifyToken(String authHeader) {
@@ -162,22 +176,41 @@ public class ProductController {
         return dataSource.getConnection();
     }
 
-    // ==================== API Endpoints ====================
+    // ✅ Helper: สร้าง ProductModel จาก ResultSet (JOIN กับ tb_categories)
+    private ProductModel mapProduct(ResultSet rs) throws SQLException {
+        return new ProductModel(
+                rs.getLong("id"),
+                rs.getString("name"),
+                rs.getDouble("price"),
+                rs.getString("cat_slug"), // category (slug)
+                rs.getLong("category_id"), // categoryId
+                rs.getString("cat_name"), // categoryName
+                rs.getString("cat_icon"), // categoryIcon
+                rs.getString("image"),
+                rs.getString("type"),
+                rs.getString("description"),
+                rs.getLong("stockQuantity"),
+                rs.getBoolean("isAvailable"),
+                rs.getString("options"));
+    }
+
+    // ✅ SQL SELECT พื้นฐานที่ JOIN กับ tb_categories
+    private static final String BASE_SELECT = "SELECT p.id, p.name, p.price, p.category_id, p.image, p.type, p.description, "
+            +
+            "p.\"stockQuantity\", p.\"isAvailable\", p.options, " +
+            "c.slug AS cat_slug, c.name AS cat_name, c.icon AS cat_icon " +
+            "FROM tb_products p " +
+            "LEFT JOIN tb_categories c ON p.category_id = c.id ";
 
     @GetMapping("")
     public ResponseEntity<?> getAllProducts() {
         try (Connection conn = getConnection()) {
-            String sql = "SELECT id, name, price, category, image, type, description, " +
-                    "\"stockQuantity\", \"isAvailable\" FROM tb_products ORDER BY id ASC";
+            String sql = BASE_SELECT + "ORDER BY p.id ASC";
             try (PreparedStatement stmt = conn.prepareStatement(sql);
                     ResultSet rs = stmt.executeQuery()) {
                 List<ProductModel> products = new ArrayList<>();
-                while (rs.next()) {
-                    products.add(new ProductModel(
-                            rs.getLong("id"), rs.getString("name"), rs.getLong("price"),
-                            rs.getString("category"), rs.getString("image"), rs.getString("type"),
-                            rs.getString("description"), rs.getLong("stockQuantity"), rs.getBoolean("isAvailable")));
-                }
+                while (rs.next())
+                    products.add(mapProduct(rs));
                 return ResponseEntity.ok(products);
             }
         } catch (SQLException e) {
@@ -190,20 +223,15 @@ public class ProductController {
     @GetMapping("/{id}")
     public ResponseEntity<?> getProductById(@PathVariable Long id) {
         try (Connection conn = getConnection()) {
-            String sql = "SELECT id, name, price, category, image, type, description, " +
-                    "\"stockQuantity\", \"isAvailable\" FROM tb_products WHERE id = ?";
+            String sql = BASE_SELECT + "WHERE p.id = ?";
             try (PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setLong(1, id);
                 try (ResultSet rs = stmt.executeQuery()) {
-                    if (rs.next()) {
-                        return ResponseEntity.ok(new ProductModel(
-                                rs.getLong("id"), rs.getString("name"), rs.getLong("price"),
-                                rs.getString("category"), rs.getString("image"), rs.getString("type"),
-                                rs.getString("description"), rs.getLong("stockQuantity"),
-                                rs.getBoolean("isAvailable")));
-                    } else {
-                        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ErrorResponse("ไม่พบสินค้า"));
-                    }
+                    if (rs.next())
+                        return ResponseEntity.ok(mapProduct(rs));
+                    else
+                        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                .body(new ErrorResponse("ไม่พบสินค้า"));
                 }
             }
         } catch (SQLException e) {
@@ -216,20 +244,13 @@ public class ProductController {
     @GetMapping("/category/{category}")
     public ResponseEntity<?> getProductsByCategory(@PathVariable String category) {
         try (Connection conn = getConnection()) {
-            String sql = "SELECT id, name, price, category, image, type, description, " +
-                    "\"stockQuantity\", \"isAvailable\" FROM tb_products " +
-                    "WHERE LOWER(category) = LOWER(?) ORDER BY id ASC";
+            String sql = BASE_SELECT + "WHERE LOWER(c.slug) = LOWER(?) ORDER BY p.id ASC";
             try (PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setString(1, category);
                 try (ResultSet rs = stmt.executeQuery()) {
                     List<ProductModel> products = new ArrayList<>();
-                    while (rs.next()) {
-                        products.add(new ProductModel(
-                                rs.getLong("id"), rs.getString("name"), rs.getLong("price"),
-                                rs.getString("category"), rs.getString("image"), rs.getString("type"),
-                                rs.getString("description"), rs.getLong("stockQuantity"),
-                                rs.getBoolean("isAvailable")));
-                    }
+                    while (rs.next())
+                        products.add(mapProduct(rs));
                     return ResponseEntity.ok(products);
                 }
             }
@@ -250,25 +271,42 @@ public class ProductController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new ErrorResponse("กรุณากรอกชื่อสินค้า"));
 
         try (Connection conn = getConnection()) {
-            String sql = "INSERT INTO tb_products (name, price, category, image, type, description, " +
-                    "\"stockQuantity\", \"isAvailable\") VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+            // ✅ หา category_id จาก slug หรือ categoryId
+            Long categoryId = request.getCategoryId();
+            if (categoryId == null && request.getCategory() != null) {
+                String findCatSql = "SELECT id FROM tb_categories WHERE LOWER(slug) = LOWER(?)";
+                try (PreparedStatement catStmt = conn.prepareStatement(findCatSql)) {
+                    catStmt.setString(1, request.getCategory());
+                    try (ResultSet catRs = catStmt.executeQuery()) {
+                        if (catRs.next())
+                            categoryId = catRs.getLong("id");
+                    }
+                }
+            }
+
+            String sql = "INSERT INTO tb_products (name, price, category, category_id, image, type, description, " +
+                    "\"stockQuantity\", \"isAvailable\", options) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             try (PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
                 stmt.setString(1, request.getName());
-                stmt.setLong(2, request.getPrice() != null ? request.getPrice() : 0L);
+                stmt.setDouble(2, request.getPrice() != null ? request.getPrice() : 0.0);
                 stmt.setString(3, request.getCategory() != null ? request.getCategory() : "other");
-                stmt.setString(4, request.getImage() != null ? request.getImage() : "");
-                stmt.setString(5, request.getType() != null ? request.getType() : "");
-                stmt.setString(6, request.getDescription() != null ? request.getDescription() : "");
-                stmt.setLong(7, request.getStockQuantity() != null ? request.getStockQuantity() : 0L);
-                stmt.setBoolean(8, request.getIsAvailable() != null ? request.getIsAvailable() : true);
+                if (categoryId != null)
+                    stmt.setLong(4, categoryId);
+                else
+                    stmt.setNull(4, java.sql.Types.BIGINT);
+                stmt.setString(5, request.getImage() != null ? request.getImage() : "");
+                stmt.setString(6, request.getType() != null ? request.getType() : "");
+                stmt.setString(7, request.getDescription() != null ? request.getDescription() : "");
+                stmt.setLong(8, request.getStockQuantity() != null ? request.getStockQuantity() : 0L);
+                stmt.setBoolean(9, request.getIsAvailable() != null ? request.getIsAvailable() : true);
+                stmt.setString(10, request.getOptions());
 
                 int affectedRows = stmt.executeUpdate();
                 if (affectedRows > 0) {
                     try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
-                        if (generatedKeys.next()) {
+                        if (generatedKeys.next())
                             return ResponseEntity.status(HttpStatus.CREATED)
                                     .body(new SuccessResponse("เพิ่มสินค้าสำเร็จ", generatedKeys.getLong(1)));
-                        }
                     }
                 }
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -297,18 +335,36 @@ public class ProductController {
                 }
             }
 
-            String sql = "UPDATE tb_products SET name = ?, price = ?, category = ?, " +
-                    "image = ?, type = ?, description = ?, \"stockQuantity\" = ?, \"isAvailable\" = ? WHERE id = ?";
+            // ✅ หา category_id
+            Long categoryId = request.getCategoryId();
+            if (categoryId == null && request.getCategory() != null) {
+                String findCatSql = "SELECT id FROM tb_categories WHERE LOWER(slug) = LOWER(?)";
+                try (PreparedStatement catStmt = conn.prepareStatement(findCatSql)) {
+                    catStmt.setString(1, request.getCategory());
+                    try (ResultSet catRs = catStmt.executeQuery()) {
+                        if (catRs.next())
+                            categoryId = catRs.getLong("id");
+                    }
+                }
+            }
+
+            String sql = "UPDATE tb_products SET name = ?, price = ?, category = ?, category_id = ?, " +
+                    "image = ?, type = ?, description = ?, \"stockQuantity\" = ?, \"isAvailable\" = ?, options = ? WHERE id = ?";
             try (PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setString(1, request.getName());
-                stmt.setLong(2, request.getPrice() != null ? request.getPrice() : 0L);
+                stmt.setDouble(2, request.getPrice() != null ? request.getPrice() : 0.0);
                 stmt.setString(3, request.getCategory() != null ? request.getCategory() : "other");
-                stmt.setString(4, request.getImage() != null ? request.getImage() : "");
-                stmt.setString(5, request.getType() != null ? request.getType() : "");
-                stmt.setString(6, request.getDescription() != null ? request.getDescription() : "");
-                stmt.setLong(7, request.getStockQuantity() != null ? request.getStockQuantity() : 0L);
-                stmt.setBoolean(8, request.getIsAvailable() != null ? request.getIsAvailable() : true);
-                stmt.setLong(9, id);
+                if (categoryId != null)
+                    stmt.setLong(4, categoryId);
+                else
+                    stmt.setNull(4, java.sql.Types.BIGINT);
+                stmt.setString(5, request.getImage() != null ? request.getImage() : "");
+                stmt.setString(6, request.getType() != null ? request.getType() : "");
+                stmt.setString(7, request.getDescription() != null ? request.getDescription() : "");
+                stmt.setLong(8, request.getStockQuantity() != null ? request.getStockQuantity() : 0L);
+                stmt.setBoolean(9, request.getIsAvailable() != null ? request.getIsAvailable() : true);
+                stmt.setString(10, request.getOptions());
+                stmt.setLong(11, id);
 
                 int affectedRows = stmt.executeUpdate();
                 if (affectedRows > 0)
@@ -339,7 +395,6 @@ public class ProductController {
                         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ErrorResponse("ไม่พบสินค้า"));
                 }
             }
-
             try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM tb_products WHERE id = ?")) {
                 stmt.setLong(1, id);
                 int affectedRows = stmt.executeUpdate();

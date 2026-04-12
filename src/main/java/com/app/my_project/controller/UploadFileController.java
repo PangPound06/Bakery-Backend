@@ -20,7 +20,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/upload")
-@CrossOrigin(origins = "https://poundbakery.vercel.app")
+@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 /*
  * public class UploadFileController {
  * 
@@ -31,7 +31,8 @@ import java.util.UUID;
  * 
  * // URL สำหรับเข้าถึงรูปภาพ
  * 
- * @Value("${upload.base-url:http://localhost:8080/uploads/images}")
+ * @Value(
+ * "${upload.base-url:http://localhost:8080/uploads/images}")
  * private String baseUrl;
  * 
  * // Upload รูปภาพ POST /api/upload/image

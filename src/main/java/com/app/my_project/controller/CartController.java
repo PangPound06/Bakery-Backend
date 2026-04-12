@@ -26,12 +26,12 @@ public class CartController {
     @Autowired
     private DataSource dataSource;
 
-    // ==================== DTO Classes ====================
-
     public static class AddToCartRequest {
         private Long productId;
         private String name, category, image;
-        private Integer price, quantity;
+        private Integer quantity;
+        private Double price;
+        private String selectedOption;
 
         public Long getProductId() {
             return productId;
@@ -49,11 +49,11 @@ public class CartController {
             this.name = name;
         }
 
-        public Integer getPrice() {
+        public Double getPrice() {
             return price;
         }
 
-        public void setPrice(Integer price) {
+        public void setPrice(Double price) {
             this.price = price;
         }
 
@@ -80,6 +80,14 @@ public class CartController {
         public void setQuantity(Integer quantity) {
             this.quantity = quantity;
         }
+
+        public String getSelectedOption() {
+            return selectedOption;
+        }
+
+        public void setSelectedOption(String selectedOption) {
+            this.selectedOption = selectedOption;
+        }
     }
 
     public static class UpdateCartRequest {
@@ -96,11 +104,13 @@ public class CartController {
 
     public static class CartItem {
         private Long id, productId;
-        private Integer quantity, price, subtotal, stock;
+        private Integer quantity, stock;
+        private Double price, subtotal;
         private String email, productName, category, image;
+        private String selectedOption;
 
         public CartItem(Long id, String email, Long productId, String productName, Integer quantity,
-                Integer price, Integer subtotal, String category, String image, Integer stock) {
+                Double price, Double subtotal, String category, String image, Integer stock, String selectedOption) {
             this.id = id;
             this.email = email;
             this.productId = productId;
@@ -110,7 +120,8 @@ public class CartController {
             this.subtotal = subtotal;
             this.category = category;
             this.image = image;
-            this.stock = stock; // ✅ เพิ่ม
+            this.stock = stock;
+            this.selectedOption = selectedOption;
         }
 
         public Long getId() {
@@ -133,7 +144,7 @@ public class CartController {
             return quantity;
         }
 
-        public Integer getPrice() {
+        public Double getPrice() {
             return price;
         }
 
@@ -145,20 +156,25 @@ public class CartController {
             return image;
         }
 
-        public Integer getSubtotal() {
+        public Double getSubtotal() {
             return subtotal;
         }
 
         public Integer getStock() {
             return stock;
         }
+
+        public String getSelectedOption() {
+            return selectedOption;
+        }
     }
 
     public static class CartResponse {
         private List<CartItem> items;
-        private Integer totalAmount, totalItems;
+        private Double totalAmount;
+        private Integer totalItems;
 
-        public CartResponse(List<CartItem> items, Integer totalAmount, Integer totalItems) {
+        public CartResponse(List<CartItem> items, Double totalAmount, Integer totalItems) {
             this.items = items;
             this.totalAmount = totalAmount;
             this.totalItems = totalItems;
@@ -168,7 +184,7 @@ public class CartController {
             return items;
         }
 
-        public Integer getTotalAmount() {
+        public Double getTotalAmount() {
             return totalAmount;
         }
 
@@ -177,7 +193,15 @@ public class CartController {
         }
     }
 
-    // ==================== Helper Methods ====================
+    private int getDisplayQty(int quantity, String selectedOption) {
+        if (selectedOption == null)
+            return quantity;
+        if (selectedOption.contains("2 ปอนด์"))
+            return quantity / 16;
+        if (selectedOption.contains("1 ปอนด์"))
+            return quantity / 8;
+        return quantity;
+    }
 
     private Algorithm getAlgorithm() {
         return Algorithm.HMAC256(jwtSecret);
@@ -211,85 +235,104 @@ public class CartController {
         }
     }
 
-    // ==================== API Endpoints ====================
-
     @PostMapping("/add")
     public ResponseEntity<?> addToCart(@RequestHeader("Authorization") String authHeader,
             @RequestBody AddToCartRequest request) {
         try (Connection conn = getConnection()) {
             String email = getUserEmailFromToken(conn, authHeader.replace("Bearer ", ""));
-            if (email == null) {
+            if (email == null)
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                         .body(java.util.Collections.singletonMap("error", "กรุณาเข้าสู่ระบบ"));
-            }
 
-            if (request.getProductId() == null) {
+            if (request.getProductId() == null)
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                         .body(java.util.Collections.singletonMap("error", "กรุณาระบุรหัสสินค้า"));
-            }
 
             int quantityToAdd = request.getQuantity() != null ? request.getQuantity() : 1;
-
             Long currentStock = getProductStock(conn, request.getProductId());
 
-            if (currentStock <= 0) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(java.util.Collections.singletonMap("error", "สินค้าหมด"));
+            if (currentStock != 9999L) {
+                if (currentStock <= 0)
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                            .body(java.util.Collections.singletonMap("error", "สินค้าหมด"));
+                if (currentStock < quantityToAdd)
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                            .body(java.util.Collections.singletonMap("error",
+                                    "สินค้าคงเหลือไม่เพียงพอ (เหลือ " + currentStock + " ชิ้น)"));
             }
 
-            if (currentStock < quantityToAdd) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(java.util.Collections.singletonMap("error",
-                                "สินค้าคงเหลือไม่เพียงพอ (เหลือ " + currentStock + " ชิ้น)"));
+            if (currentStock == 9999L) {
+                String countSql = "SELECT COALESCE(SUM(quantity), 0) FROM tb_cart WHERE email = ? AND product_id = ?";
+                try (PreparedStatement countStmt = conn.prepareStatement(countSql)) {
+                    countStmt.setString(1, email);
+                    countStmt.setLong(2, request.getProductId());
+                    try (ResultSet countRs = countStmt.executeQuery()) {
+                        if (countRs.next()) {
+                            int totalInCart = countRs.getInt(1);
+                            if (totalInCart + quantityToAdd > 10) {
+                                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                        .body(java.util.Collections.singletonMap("error",
+                                                "สินค้าทำสดสั่งได้รวมสูงสุด 10 แก้ว (ในตะกร้ามีแล้ว " + totalInCart
+                                                        + " แก้ว)"));
+                            }
+                        }
+                    }
+                }
             }
 
             String productName = request.getName() != null ? request.getName() : "Unknown Product";
-            Integer productPrice = request.getPrice() != null ? request.getPrice() : 0;
+            double productPrice = request.getPrice() != null ? request.getPrice() : 0.0;
             String productCategory = request.getCategory() != null ? request.getCategory() : "other";
             String productImage = request.getImage() != null ? request.getImage() : "";
+            String selectedOption = request.getSelectedOption();
 
             try (PreparedStatement checkStmt = conn.prepareStatement(
-                    "SELECT id, quantity, price FROM tb_cart WHERE email = ? AND product_id = ?")) {
+                    "SELECT id, quantity, price FROM tb_cart WHERE email = ? AND product_id = ? AND " +
+                            "(selected_option = ? OR (selected_option IS NULL AND ? IS NULL))")) {
                 checkStmt.setString(1, email);
                 checkStmt.setLong(2, request.getProductId());
+                checkStmt.setString(3, selectedOption);
+                checkStmt.setString(4, selectedOption);
 
                 try (ResultSet rs = checkStmt.executeQuery()) {
                     if (rs.next()) {
                         int currentQuantity = rs.getInt("quantity");
                         int newQuantity = currentQuantity + quantityToAdd;
 
-                        // ✅ เช็คว่า quantity ใหม่รวมกันแล้วไม่เกิน stock
-                        if (newQuantity > currentStock) {
+                        if (currentStock != 9999L && newQuantity > currentStock)
                             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                                     .body(java.util.Collections.singletonMap("error",
                                             "สินค้าคงเหลือไม่เพียงพอ (เหลือ " + currentStock + " ชิ้น, ในตะกร้ามีแล้ว "
                                                     + currentQuantity + " ชิ้น)"));
-                        }
 
-                        int priceInDb = rs.getInt("price");
-                        int newSubtotal = newQuantity * priceInDb;
+                        double priceInDb = rs.getDouble("price");
+                        int displayQty = getDisplayQty(newQuantity, selectedOption);
+                        double newSubtotal = displayQty * priceInDb;
+                        long cartId = rs.getLong("id");
 
                         try (PreparedStatement updateStmt = conn.prepareStatement(
-                                "UPDATE tb_cart SET quantity = ?, subtotal = ? WHERE email = ? AND product_id = ?")) {
+                                "UPDATE tb_cart SET quantity = ?, subtotal = ? WHERE id = ?")) {
                             updateStmt.setInt(1, newQuantity);
-                            updateStmt.setInt(2, newSubtotal);
-                            updateStmt.setString(3, email);
-                            updateStmt.setLong(4, request.getProductId());
+                            updateStmt.setDouble(2, newSubtotal);
+                            updateStmt.setLong(3, cartId);
                             updateStmt.executeUpdate();
                         }
                     } else {
-                        int subtotal = quantityToAdd * productPrice;
+                        int displayQtyForInsert = getDisplayQty(quantityToAdd, selectedOption);
+                        double subtotal = displayQtyForInsert * productPrice;
+
                         try (PreparedStatement insertStmt = conn.prepareStatement(
-                                "INSERT INTO tb_cart (email, product_id, product_name, quantity, price, category, image, subtotal) "
-                                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+                                "INSERT INTO tb_cart (email, product_id, product_name, quantity, price, category, image, subtotal, selected_option) "
+                                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                             insertStmt.setString(1, email);
                             insertStmt.setLong(2, request.getProductId());
                             insertStmt.setString(3, productName);
                             insertStmt.setInt(4, quantityToAdd);
-                            insertStmt.setInt(5, productPrice);
+                            insertStmt.setDouble(5, productPrice);
                             insertStmt.setString(6, productCategory);
                             insertStmt.setString(7, productImage);
-                            insertStmt.setInt(8, subtotal);
+                            insertStmt.setDouble(8, subtotal);
+                            insertStmt.setString(9, selectedOption);
                             insertStmt.executeUpdate();
                         }
                     }
@@ -312,7 +355,6 @@ public class CartController {
             if (email == null)
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
 
-            // ✅ ลบรายการ cart ที่สินค้าถูกลบไปแล้วออกก่อน
             try (PreparedStatement cleanStmt = conn.prepareStatement(
                     "DELETE FROM tb_cart WHERE product_id NOT IN (SELECT id FROM tb_products)")) {
                 cleanStmt.executeUpdate();
@@ -320,8 +362,8 @@ public class CartController {
 
             try (PreparedStatement stmt = conn.prepareStatement(
                     "SELECT c.id, c.email, c.product_id, c.product_name, c.quantity, c.price, " +
-                            "(c.quantity * c.price) as subtotal, c.category, c.image, " +
-                            "p.\"stockQuantity\" as stock " +
+                            "c.subtotal, c.category, c.image, " +
+                            "p.\"stockQuantity\" as stock, c.selected_option " +
                             "FROM tb_cart c " +
                             "LEFT JOIN tb_products p ON c.product_id = p.id " +
                             "WHERE c.email = ? ORDER BY c.id DESC")) {
@@ -329,20 +371,27 @@ public class CartController {
 
                 try (ResultSet rs = stmt.executeQuery()) {
                     List<CartItem> items = new ArrayList<>();
-                    int totalAmount = 0, totalItems = 0;
+                    double totalAmount = 0.0;
+                    int totalItems = 0;
 
                     while (rs.next()) {
                         int quantity = rs.getInt("quantity");
-                        int subtotal = rs.getInt("subtotal");
+                        double price = rs.getDouble("price");
+                        String selectedOption = rs.getString("selected_option");
+                        int displayQty = getDisplayQty(quantity, selectedOption);
+                        double correctSubtotal = price * displayQty;
 
                         items.add(new CartItem(
                                 rs.getLong("id"), rs.getString("email"), rs.getLong("product_id"),
-                                rs.getString("product_name"), quantity, rs.getInt("price"),
-                                subtotal, rs.getString("category"), rs.getString("image"),
-                                rs.getInt("stock")));
+                                rs.getString("product_name"),
+                                displayQty,
+                                price,
+                                correctSubtotal,
+                                rs.getString("category"), rs.getString("image"),
+                                rs.getInt("stock"), selectedOption));
 
-                        totalAmount += subtotal;
-                        totalItems += quantity;
+                        totalAmount += correctSubtotal;
+                        totalItems += displayQty;
                     }
 
                     return ResponseEntity.ok(new CartResponse(items, totalAmount, totalItems));
@@ -359,35 +408,43 @@ public class CartController {
             @PathVariable Long cartId, @RequestBody UpdateCartRequest request) {
         try (Connection conn = getConnection()) {
             String email = getUserEmailFromToken(conn, authHeader.replace("Bearer ", ""));
-            if (email == null || request.getQuantity() <= 0) {
+            if (email == null || request.getQuantity() <= 0)
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
-            }
 
-            // ดึง productId จาก cartId
             Long productId = null;
+            String selectedOpt = null;
+            double price = 0.0;
+
             try (PreparedStatement selectStmt = conn.prepareStatement(
-                    "SELECT id, product_id FROM tb_cart WHERE id = ? AND email = ?")) {
+                    "SELECT id, product_id, selected_option, price FROM tb_cart WHERE id = ? AND email = ?")) {
                 selectStmt.setLong(1, cartId);
                 selectStmt.setString(2, email);
                 try (ResultSet rs = selectStmt.executeQuery()) {
                     if (!rs.next())
                         return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
                     productId = rs.getLong("product_id");
+                    selectedOpt = rs.getString("selected_option");
+                    price = rs.getDouble("price");
                 }
             }
 
-            // ✅ เช็ค stock ก่อน update
             Long currentStock = getProductStock(conn, productId);
-            if (request.getQuantity() > currentStock) {
+            if (currentStock != 9999L && request.getQuantity() > currentStock)
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                         .body(java.util.Collections.singletonMap("error",
                                 "สินค้าคงเหลือไม่เพียงพอ (เหลือ " + currentStock + " ชิ้น)"));
-            }
+
+            if (currentStock == 9999L && request.getQuantity() > 10)
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(java.util.Collections.singletonMap("error", "สินค้าทำสดสั่งได้สูงสุด 10 ชิ้น"));
+
+            int displayQty = getDisplayQty(request.getQuantity(), selectedOpt);
+            double newSubtotal = displayQty * price;
 
             try (PreparedStatement updateStmt = conn.prepareStatement(
-                    "UPDATE tb_cart SET quantity = ?, subtotal = ? * price WHERE id = ? AND email = ?")) {
+                    "UPDATE tb_cart SET quantity = ?, subtotal = ? WHERE id = ? AND email = ?")) {
                 updateStmt.setInt(1, request.getQuantity());
-                updateStmt.setInt(2, request.getQuantity());
+                updateStmt.setDouble(2, newSubtotal);
                 updateStmt.setLong(3, cartId);
                 updateStmt.setString(4, email);
                 return updateStmt.executeUpdate() > 0
@@ -408,16 +465,13 @@ public class CartController {
             if (email == null)
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
 
-            // ✅ ตรวจสอบว่า cartId มีอยู่จริงก่อนลบ
             try (PreparedStatement selectStmt = conn.prepareStatement(
                     "SELECT id FROM tb_cart WHERE id = ? AND email = ?")) {
                 selectStmt.setLong(1, cartId);
                 selectStmt.setString(2, email);
-
                 try (ResultSet rs = selectStmt.executeQuery()) {
-                    if (!rs.next()) {
+                    if (!rs.next())
                         return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-                    }
                 }
             }
 
@@ -425,7 +479,6 @@ public class CartController {
                     "DELETE FROM tb_cart WHERE id = ? AND email = ?")) {
                 deleteStmt.setLong(1, cartId);
                 deleteStmt.setString(2, email);
-
                 return deleteStmt.executeUpdate() > 0
                         ? ResponseEntity.ok().build()
                         : ResponseEntity.status(HttpStatus.NOT_FOUND).build();
@@ -447,7 +500,6 @@ public class CartController {
                 deleteStmt.setString(1, email);
                 deleteStmt.executeUpdate();
             }
-
             return ResponseEntity.ok().build();
         } catch (Exception e) {
             e.printStackTrace();
