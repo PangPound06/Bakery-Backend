@@ -288,7 +288,10 @@ public class DineInOrderController {
                 o.put("tableNo", order.getTableNo());
                 o.put("total", order.getTotal());
                 o.put("subtotal", order.getSubtotal());
-                o.put("createdAt", order.getCreatedAt());
+                o.put("createdAt", order.getCreatedAt()
+                        .atZone(java.time.ZoneId.of("Asia/Bangkok"))
+                        .toOffsetDateTime()
+                        .toString());
                 o.put("items", itemList);
                 o.put("paymentStatus", order.getPaymentStatus());
                 result.add(o);
@@ -314,7 +317,10 @@ public class DineInOrderController {
             o.put("orderStatus", order.getOrderStatus());
             o.put("total", order.getTotal());
             o.put("subtotal", order.getSubtotal());
-            o.put("createdAt", order.getCreatedAt());
+            o.put("createdAt", order.getCreatedAt()
+                    .atZone(java.time.ZoneId.of("Asia/Bangkok"))
+                    .toOffsetDateTime()
+                    .toString());
             o.put("items", items);
             result.add(o);
         }
@@ -335,7 +341,10 @@ public class DineInOrderController {
             o.put("orderStatus", order.getOrderStatus());
             o.put("total", order.getTotal());
             o.put("subtotal", order.getSubtotal());
-            o.put("createdAt", order.getCreatedAt());
+            o.put("createdAt", order.getCreatedAt()
+                    .atZone(java.time.ZoneId.of("Asia/Bangkok"))
+                    .toOffsetDateTime()
+                    .toString());
             response.put("order", o);
             response.put("items", items);
             return ResponseEntity.ok(response);

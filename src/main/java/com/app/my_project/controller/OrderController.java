@@ -359,7 +359,10 @@ public class OrderController {
                     o.put("orderType", ot);
                     o.put("paymentStatus", order.getPaymentStatus());
                     o.put("paymentMethod", order.getPaymentMethod());
-                    o.put("createdAt", order.getCreatedAt());
+                    o.put("createdAt", order.getCreatedAt()
+                            .atZone(java.time.ZoneId.of("Asia/Bangkok"))
+                            .toOffsetDateTime()
+                            .toString());
                     o.put("receiverName", order.getReceiverName());
                     o.put("note", order.getNote());
                     o.put("slipImage", order.getSlipImage());
@@ -643,7 +646,10 @@ public class OrderController {
                 o.put("note", order.getNote());
                 o.put("total", order.getTotal());
                 o.put("subtotal", order.getSubtotal());
-                o.put("createdAt", order.getCreatedAt());
+                o.put("createdAt", order.getCreatedAt()
+                        .atZone(java.time.ZoneId.of("Asia/Bangkok"))
+                        .toOffsetDateTime()
+                        .toString());
                 o.put("items", displayItems);
                 result.add(o);
             }
