@@ -657,6 +657,107 @@ public class OrderController {
         }
     }
 
+    // POST /api/orders/{orderId}/items — Admin only
+    @PostMapping("/{orderId}/items")
+    public ResponseEntity<?> addOrderItem(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable Long orderId,
+            @RequestBody Map<String, Object> request) {
+
+        Long userId = getUserIdFromToken(authHeader);
+        if (userId == null)
+            return ResponseEntity.status(401)
+                    .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
+        if (!isAdmin(userId))
+            return ResponseEntity.status(403)
+                    .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
+
+        Map<String, Object> response = new HashMap<>();
+        try {
+            Optional<OrderEntity> orderOpt = orderRepository.findById(orderId);
+            if (orderOpt.isEmpty()) {
+                response.put("success", false);
+                response.put("message", "ไม่พบคำสั่งซื้อ");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            OrderEntity order = orderOpt.get();
+            if ("delivered".equals(order.getOrderStatus()) || "cancelled".equals(order.getOrderStatus())) {
+                response.put("success", false);
+                response.put("message", "ไม่สามารถแก้ไขคำสั่งซื้อที่เสร็จสิ้นแล้ว");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            Long productId = Long.parseLong(request.get("productId").toString());
+            String productName = (String) request.get("productName");
+            double price = Double.parseDouble(request.get("price").toString());
+            int displayQty = Integer.parseInt(request.get("quantity").toString());
+            String selectedOption = request.get("selectedOption") != null
+                    ? request.get("selectedOption").toString()
+                    : null;
+            String image = request.get("image") != null ? request.get("image").toString() : null;
+
+            // แปลง displayQty → rawQty
+            int multiplier = 1;
+            if (selectedOption != null) {
+                if (selectedOption.contains("2 ปอนด์"))
+                    multiplier = 16;
+                else if (selectedOption.contains("1 ปอนด์"))
+                    multiplier = 8;
+            }
+            int rawQty = displayQty * multiplier;
+
+            // ลด stock
+            try (Connection conn = getConnection()) {
+                String sql = "UPDATE tb_products " +
+                        "SET \"stockQuantity\" = GREATEST(\"stockQuantity\" - ?, 0), " +
+                        "    \"isAvailable\" = (GREATEST(\"stockQuantity\" - ?, 0) > 0) " +
+                        "WHERE id = ? AND \"stockQuantity\" != " + FRESH_STOCK_VALUE;
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setInt(1, rawQty);
+                    stmt.setInt(2, rawQty);
+                    stmt.setLong(3, productId);
+                    stmt.executeUpdate();
+                }
+            }
+
+            // บันทึก item
+            OrderItemEntity newItem = new OrderItemEntity();
+            newItem.setOrderId(orderId);
+            newItem.setProductId(productId);
+            newItem.setProductName(productName);
+            newItem.setPrice(price);
+            newItem.setQuantity(rawQty);
+            newItem.setSelectedOption(selectedOption);
+            newItem.setImage(image);
+            OrderItemEntity saved = orderItemRepository.save(newItem);
+
+            // คำนวณยอดใหม่
+            List<OrderItemEntity> allItems = orderItemRepository.findByOrderId(orderId);
+            double newSubtotal = allItems.stream()
+                    .mapToDouble(i -> i.getPrice() * getDisplayQty(i.getQuantity(), i.getSelectedOption()))
+                    .sum();
+            double newTotal = newSubtotal + order.getShipping();
+            order.setSubtotal(newSubtotal);
+            order.setTotal(newTotal);
+            orderRepository.save(order);
+
+            // ส่ง displayItem กลับ
+            response.put("success", true);
+            response.put("newItem", toDisplayItem(saved));
+            response.put("newSubtotal", newSubtotal);
+            response.put("newTotal", newTotal);
+            response.put("message", "เพิ่มสินค้าสำเร็จ");
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            response.put("success", false);
+            response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
     // PATCH /api/orders/{orderId}/items/{itemId} — Admin only
     @PatchMapping("/{orderId}/items/{itemId}")
     public ResponseEntity<?> updateOrderItemQuantity(
