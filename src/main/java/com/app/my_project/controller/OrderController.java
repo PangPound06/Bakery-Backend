@@ -116,7 +116,7 @@ public class OrderController {
             order.setPaymentMethod((String) request.get("paymentMethod"));
             order.setPaymentStatus((String) request.get("paymentStatus"));
             order.setPaymentId((String) request.get("paymentId"));
-            order.setCreatedAt(LocalDateTime.now());
+            order.setCreatedAt(LocalDateTime.now(java.time.ZoneId.of("Asia/Bangkok")));
 
             String orderType = request.get("orderType") != null ? (String) request.get("orderType") : "online";
             order.setOrderType(orderType);

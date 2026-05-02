@@ -101,7 +101,7 @@ public class DineInOrderController {
             order.setSubtotal(Double.parseDouble(request.get("subtotal").toString()));
             order.setTotal(Double.parseDouble(request.get("total").toString()));
             order.setOrderStatus("pending");
-            order.setCreatedAt(LocalDateTime.now());
+            order.setCreatedAt(LocalDateTime.now(java.time.ZoneId.of("Asia/Bangkok")));
 
             DineInOrderEntity saved = dineInOrderRepository.save(order);
 
