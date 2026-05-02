@@ -219,7 +219,31 @@ public class OrderController {
 
         try {
             List<OrderEntity> orders = orderRepository.findByEmailOrderByCreatedAtDesc(email);
-            return ResponseEntity.ok(orders);
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (OrderEntity order : orders) {
+                Map<String, Object> o = new HashMap<>();
+                o.put("id", order.getId());
+                o.put("ordCode", order.getOrdCode());
+                o.put("email", order.getEmail());
+                o.put("subtotal", order.getSubtotal());
+                o.put("shipping", order.getShipping());
+                o.put("total", order.getTotal());
+                o.put("paymentMethod", order.getPaymentMethod());
+                o.put("paymentStatus", order.getPaymentStatus());
+                o.put("orderStatus", order.getOrderStatus());
+                o.put("orderType", order.getOrderType());
+                o.put("receiverName", order.getReceiverName());
+                o.put("receiverPhone", order.getReceiverPhone());
+                o.put("receiverAddress", order.getReceiverAddress());
+                o.put("note", order.getNote());
+                o.put("slipImage", order.getSlipImage());
+                o.put("createdAt", order.getCreatedAt()
+                        .atZone(java.time.ZoneId.of("Asia/Bangkok"))
+                        .toInstant()
+                        .toString());
+                result.add(o);
+            }
+            return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.ok(new ArrayList<>());
         }
@@ -292,7 +316,7 @@ public class OrderController {
         orderMap.put("slipImage", order.getSlipImage());
         orderMap.put("createdAt", order.getCreatedAt()
                 .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                .toOffsetDateTime()
+                .toInstant()
                 .toString());
 
         response.put("success", true);
@@ -382,7 +406,7 @@ public class OrderController {
                     o.put("paymentMethod", order.getPaymentMethod());
                     o.put("createdAt", order.getCreatedAt()
                             .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                            .toOffsetDateTime()
+                            .toInstant()
                             .toString());
                     o.put("receiverName", order.getReceiverName());
                     o.put("note", order.getNote());
@@ -669,7 +693,7 @@ public class OrderController {
                 o.put("subtotal", order.getSubtotal());
                 o.put("createdAt", order.getCreatedAt()
                         .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                        .toOffsetDateTime()
+                        .toInstant()
                         .toString());
                 o.put("items", displayItems);
                 result.add(o);

@@ -290,7 +290,7 @@ public class DineInOrderController {
                 o.put("subtotal", order.getSubtotal());
                 o.put("createdAt", order.getCreatedAt()
                         .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                        .toOffsetDateTime()
+                        .toInstant()
                         .toString());
                 o.put("items", itemList);
                 o.put("paymentStatus", order.getPaymentStatus());
@@ -319,7 +319,7 @@ public class DineInOrderController {
             o.put("subtotal", order.getSubtotal());
             o.put("createdAt", order.getCreatedAt()
                     .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                    .toOffsetDateTime()
+                    .toInstant()
                     .toString());
             o.put("items", items);
             result.add(o);
@@ -343,7 +343,7 @@ public class DineInOrderController {
             o.put("subtotal", order.getSubtotal());
             o.put("createdAt", order.getCreatedAt()
                     .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                    .toOffsetDateTime()
+                    .toInstant()
                     .toString());
             response.put("order", o);
             response.put("items", items);
