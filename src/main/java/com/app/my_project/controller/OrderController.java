@@ -239,7 +239,7 @@ public class OrderController {
                 o.put("slipImage", order.getSlipImage());
                 o.put("createdAt", order.getCreatedAt()
                         .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                        .toInstant()
+                        .toOffsetDateTime()
                         .toString());
                 result.add(o);
             }
@@ -316,7 +316,7 @@ public class OrderController {
         orderMap.put("slipImage", order.getSlipImage());
         orderMap.put("createdAt", order.getCreatedAt()
                 .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                .toInstant()
+                .toOffsetDateTime()
                 .toString());
 
         response.put("success", true);
@@ -406,7 +406,7 @@ public class OrderController {
                     o.put("paymentMethod", order.getPaymentMethod());
                     o.put("createdAt", order.getCreatedAt()
                             .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                            .toInstant()
+                            .toOffsetDateTime()
                             .toString());
                     o.put("receiverName", order.getReceiverName());
                     o.put("note", order.getNote());
@@ -693,7 +693,7 @@ public class OrderController {
                 o.put("subtotal", order.getSubtotal());
                 o.put("createdAt", order.getCreatedAt()
                         .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                        .toInstant()
+                        .toOffsetDateTime()
                         .toString());
                 o.put("items", displayItems);
                 result.add(o);
