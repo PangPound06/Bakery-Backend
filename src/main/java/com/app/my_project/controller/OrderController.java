@@ -274,8 +274,29 @@ public class OrderController {
             displayItems.add(di);
         }
 
+        Map<String, Object> orderMap = new HashMap<>();
+        orderMap.put("id", order.getId());
+        orderMap.put("ordCode", order.getOrdCode());
+        orderMap.put("email", order.getEmail());
+        orderMap.put("subtotal", order.getSubtotal());
+        orderMap.put("shipping", order.getShipping());
+        orderMap.put("total", order.getTotal());
+        orderMap.put("paymentMethod", order.getPaymentMethod());
+        orderMap.put("paymentStatus", order.getPaymentStatus());
+        orderMap.put("orderStatus", order.getOrderStatus());
+        orderMap.put("orderType", order.getOrderType());
+        orderMap.put("receiverName", order.getReceiverName());
+        orderMap.put("receiverPhone", order.getReceiverPhone());
+        orderMap.put("receiverAddress", order.getReceiverAddress());
+        orderMap.put("note", order.getNote());
+        orderMap.put("slipImage", order.getSlipImage());
+        orderMap.put("createdAt", order.getCreatedAt()
+                .atZone(java.time.ZoneId.of("Asia/Bangkok"))
+                .toOffsetDateTime()
+                .toString());
+
         response.put("success", true);
-        response.put("order", order);
+        response.put("order", orderMap);
         response.put("items", displayItems);
         return ResponseEntity.ok(response);
     }
