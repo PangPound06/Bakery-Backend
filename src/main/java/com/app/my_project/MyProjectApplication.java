@@ -1,9 +1,12 @@
 package com.app.my_project;
 
+import java.util.TimeZone;
+
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.bind.annotation.GetMapping;
+
+import jakarta.annotation.PostConstruct;
 import org.springframework.context.annotation.ComponentScan;
 
 @SpringBootApplication
@@ -15,8 +18,9 @@ public class MyProjectApplication {
 		SpringApplication.run(MyProjectApplication.class, args);
 	}
 
-	@GetMapping("/hello")
-	public String hello() {
-		return "Hello, World!!!";
-	}
+	@PostConstruct
+    public void init() {
+        // บังคับให้เซิร์ฟเวอร์ทำงานในเวลาประเทศไทยทั้งหมด
+        TimeZone.setDefault(TimeZone.getTimeZone("Asia/Bangkok"));
+    }
 }

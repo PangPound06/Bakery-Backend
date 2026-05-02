@@ -116,7 +116,7 @@ public class OrderController {
             order.setPaymentMethod((String) request.get("paymentMethod"));
             order.setPaymentStatus((String) request.get("paymentStatus"));
             order.setPaymentId((String) request.get("paymentId"));
-            order.setCreatedAt(LocalDateTime.now(java.time.ZoneId.of("Asia/Bangkok")));
+            order.setCreatedAt(LocalDateTime.now());
 
             String orderType = request.get("orderType") != null ? (String) request.get("orderType") : "online";
             order.setOrderType(orderType);
@@ -237,10 +237,7 @@ public class OrderController {
                 o.put("receiverAddress", order.getReceiverAddress());
                 o.put("note", order.getNote());
                 o.put("slipImage", order.getSlipImage());
-                o.put("createdAt", order.getCreatedAt()
-                        .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                        .toOffsetDateTime()
-                        .toString());
+                o.put("createdAt", order.getCreatedAt().toString());
                 result.add(o);
             }
             return ResponseEntity.ok(result);
@@ -404,10 +401,7 @@ public class OrderController {
                     o.put("orderType", ot);
                     o.put("paymentStatus", order.getPaymentStatus());
                     o.put("paymentMethod", order.getPaymentMethod());
-                    o.put("createdAt", order.getCreatedAt()
-                            .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                            .toOffsetDateTime()
-                            .toString());
+                    o.put("createdAt", order.getCreatedAt().toString());
                     o.put("receiverName", order.getReceiverName());
                     o.put("note", order.getNote());
                     o.put("slipImage", order.getSlipImage());
@@ -691,10 +685,7 @@ public class OrderController {
                 o.put("note", order.getNote());
                 o.put("total", order.getTotal());
                 o.put("subtotal", order.getSubtotal());
-                o.put("createdAt", order.getCreatedAt()
-                        .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                        .toOffsetDateTime()
-                        .toString());
+                o.put("createdAt", order.getCreatedAt().toString());
                 o.put("items", displayItems);
                 result.add(o);
             }

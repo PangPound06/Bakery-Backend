@@ -101,7 +101,7 @@ public class DineInOrderController {
             order.setSubtotal(Double.parseDouble(request.get("subtotal").toString()));
             order.setTotal(Double.parseDouble(request.get("total").toString()));
             order.setOrderStatus("pending");
-            order.setCreatedAt(LocalDateTime.now(java.time.ZoneId.of("Asia/Bangkok")));
+            order.setCreatedAt(LocalDateTime.now());
 
             DineInOrderEntity saved = dineInOrderRepository.save(order);
 
@@ -288,10 +288,7 @@ public class DineInOrderController {
                 o.put("tableNo", order.getTableNo());
                 o.put("total", order.getTotal());
                 o.put("subtotal", order.getSubtotal());
-                o.put("createdAt", order.getCreatedAt()
-                        .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                        .toOffsetDateTime()
-                        .toString());
+                o.put("createdAt", order.getCreatedAt().toString());
                 o.put("items", itemList);
                 o.put("paymentStatus", order.getPaymentStatus());
                 result.add(o);
@@ -317,10 +314,7 @@ public class DineInOrderController {
             o.put("orderStatus", order.getOrderStatus());
             o.put("total", order.getTotal());
             o.put("subtotal", order.getSubtotal());
-            o.put("createdAt", order.getCreatedAt()
-                    .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                    .toOffsetDateTime()
-                    .toString());
+            o.put("createdAt", order.getCreatedAt().toString());
             o.put("items", items);
             result.add(o);
         }
@@ -341,10 +335,7 @@ public class DineInOrderController {
             o.put("orderStatus", order.getOrderStatus());
             o.put("total", order.getTotal());
             o.put("subtotal", order.getSubtotal());
-            o.put("createdAt", order.getCreatedAt()
-                    .atZone(java.time.ZoneId.of("Asia/Bangkok"))
-                    .toOffsetDateTime()
-                    .toString());
+            o.put("createdAt", order.getCreatedAt().toString());
             response.put("order", o);
             response.put("items", items);
             return ResponseEntity.ok(response);
