@@ -102,11 +102,16 @@ public class OrderController {
         Map<String, Object> response = new HashMap<>();
         try {
 
-            // ✅ ดึง email จาก token แทน request body
+            // ดึง email จาก token แทน request body
             String email = org.springframework.security.core.context.SecurityContextHolder
                     .getContext()
                     .getAuthentication()
                     .getName();
+
+            // ถ้า Frontend ส่ง email มาอย่างเจาะจง ให้ใช้ของ Frontend แทน
+            if (request.get("email") != null && !request.get("email").toString().isEmpty()) {
+                email = request.get("email").toString();
+            }
 
             OrderEntity order = new OrderEntity();
             order.setEmail(email);
