@@ -38,7 +38,7 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .addFilterBefore(
-                        new JwtAuthFilter(jwtSecret, userRepository, adminRepository), // ส่ง repository ไปที่ filter
+                        new JwtAuthFilter(jwtSecret, userRepository, adminRepository),
                         UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/**").permitAll()
@@ -51,10 +51,12 @@ public class SecurityConfig {
     public org.springframework.web.cors.CorsConfigurationSource corsConfigurationSource() {
         org.springframework.web.cors.CorsConfiguration config = new org.springframework.web.cors.CorsConfiguration();
 
-        // ✅ ระบุ origins ชัดเจน (allowCredentials=true ใช้กับ "*" ไม่ได้)
-        config.setAllowedOrigins(java.util.List.of(
-                "http://localhost:3000",
-                "https://poundbakery.vercel.app"));
+        // ใช้ setAllowedOriginPatterns แทน setAllowedOrigins
+        // เพราะรองรับ wildcard * และใช้คู่กับ allowCredentials(true) ได้
+        config.setAllowedOriginPatterns(java.util.List.of(
+                "http://localhost:*",
+                "https://poundbakery.vercel.app",
+                "https://*.vercel.app"));
 
         config.setAllowedMethods(java.util.List.of(
                 "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
@@ -66,7 +68,8 @@ public class SecurityConfig {
         config.setAllowCredentials(true);
         config.setMaxAge(3600L);
 
-        org.springframework.web.cors.UrlBasedCorsConfigurationSource source = new org.springframework.web.cors.UrlBasedCorsConfigurationSource();
+        org.springframework.web.cors.UrlBasedCorsConfigurationSource source =
+                new org.springframework.web.cors.UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
         return source;
     }
