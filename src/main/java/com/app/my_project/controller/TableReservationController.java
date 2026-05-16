@@ -17,42 +17,47 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/reservations")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
+@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" }, allowedHeaders = "*")
 public class TableReservationController {
 
     @Autowired
     private TableReservationRepository reservationRepository;
 
-    // ─── ช่วงเวลาที่รับจอง (ปรับตามร้าน) ───────────────────────────────────
-    private static final LocalTime OPEN_TIME  = LocalTime.of(10, 0);
+    // ─── ช่วงเวลาที่รับจอง (ปรับตามร้าน)
+    private static final LocalTime OPEN_TIME = LocalTime.of(10, 0);
     private static final LocalTime CLOSE_TIME = LocalTime.of(20, 0);
-    private static final int SLOT_MINUTES     = 30; // ทุก 30 นาที
+    private static final int SLOT_MINUTES = 30; // ทุก 30 นาที
 
-    // ─── สถานะที่ admin เปลี่ยนได้ ──────────────────────────────────────────
-    private static final Set<String> VALID_STATUSES =
-            Set.of("pending", "confirmed", "cancelled", "completed");
+    // ─── สถานะที่ admin เปลี่ยนได้
+    private static final Set<String> VALID_STATUSES = Set.of("pending", "confirmed", "cancelled", "completed");
 
-    // =========================================================
+    // ─── Helper: ตรวจว่าเป็น Admin
+    private boolean isAdmin() {
+        return SecurityContextHolder.getContext().getAuthentication()
+                .getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+    }
+
     // 1. USER — สร้างการจอง
-    // =========================================================
     @PostMapping
     public ResponseEntity<?> createReservation(@RequestBody Map<String, Object> request) {
         Map<String, Object> response = new HashMap<>();
         try {
             String email = SecurityContextHolder.getContext().getAuthentication().getName();
 
-            // ── Validate input ──────────────────────────────
-            String tableNo       = (String) request.get("tableNo");
-            String dateStr       = (String) request.get("reservationDate"); // "2025-05-20"
-            String timeStr       = (String) request.get("reservationTime"); // "12:30"
-            String customerName  = (String) request.get("customerName");
+            // ── Validate input
+            String tableNo = (String) request.get("tableNo");
+            String dateStr = (String) request.get("reservationDate"); // "2025-05-20"
+            String timeStr = (String) request.get("reservationTime"); // "12:30"
+            String customerName = (String) request.get("customerName");
             String customerPhone = (String) request.get("customerPhone");
-            Object partySizeObj  = request.get("partySize");
-            String note          = (String) request.getOrDefault("note", "");
+            Object partySizeObj = request.get("partySize");
+            String note = (String) request.getOrDefault("note", "");
 
             if (tableNo == null || dateStr == null || timeStr == null
                     || customerName == null || customerPhone == null || partySizeObj == null) {
-                response.put("message", "กรุณากรอกข้อมูลให้ครบถ้วน (tableNo, reservationDate, reservationTime, customerName, customerPhone, partySize)");
+                response.put("message",
+                        "กรุณากรอกข้อมูลให้ครบถ้วน (tableNo, reservationDate, reservationTime, customerName, customerPhone, partySize)");
                 return ResponseEntity.badRequest().body(response);
             }
 
@@ -77,10 +82,9 @@ public class TableReservationController {
             // ── ตรวจเวลาเปิด-ปิด ────────────────────────────
             if (reservationTime.isBefore(OPEN_TIME) || reservationTime.isAfter(CLOSE_TIME)) {
                 response.put("message", String.format(
-                    "เวลาที่รับจองอยู่ระหว่าง %s - %s",
-                    OPEN_TIME.format(DateTimeFormatter.ofPattern("HH:mm")),
-                    CLOSE_TIME.format(DateTimeFormatter.ofPattern("HH:mm"))
-                ));
+                        "เวลาที่รับจองอยู่ระหว่าง %s - %s",
+                        OPEN_TIME.format(DateTimeFormatter.ofPattern("HH:mm")),
+                        CLOSE_TIME.format(DateTimeFormatter.ofPattern("HH:mm"))));
                 return ResponseEntity.badRequest().body(response);
             }
 
@@ -91,8 +95,8 @@ public class TableReservationController {
             }
 
             // ── ตรวจว่าโต๊ะว่างหรือไม่ ──────────────────────
-            List<TableReservationEntity> conflicts =
-                reservationRepository.findConflicting(tableNo, reservationDate, reservationTime);
+            List<TableReservationEntity> conflicts = reservationRepository.findConflicting(tableNo, reservationDate,
+                    reservationTime);
             if (!conflicts.isEmpty()) {
                 response.put("message", "โต๊ะ " + tableNo + " ถูกจองในช่วงเวลานี้แล้ว กรุณาเลือกเวลาอื่น");
                 return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
@@ -102,8 +106,8 @@ public class TableReservationController {
             String code = generateReservationCode(reservationDate);
 
             int partySize = (partySizeObj instanceof Integer)
-                ? (Integer) partySizeObj
-                : Integer.parseInt(partySizeObj.toString());
+                    ? (Integer) partySizeObj
+                    : Integer.parseInt(partySizeObj.toString());
 
             // ── บันทึกลง DB ─────────────────────────────────
             TableReservationEntity reservation = new TableReservationEntity();
@@ -133,15 +137,13 @@ public class TableReservationController {
         }
     }
 
-    // =========================================================
     // 2. USER — ดูการจองของตัวเอง
-    // =========================================================
     @GetMapping("/my")
     public ResponseEntity<?> getMyReservations() {
         try {
             String email = SecurityContextHolder.getContext().getAuthentication().getName();
-            List<TableReservationEntity> list =
-                reservationRepository.findByEmailOrderByReservationDateDescReservationTimeDesc(email);
+            List<TableReservationEntity> list = reservationRepository
+                    .findByEmailOrderByReservationDateDescReservationTimeDesc(email);
             return ResponseEntity.ok(list.stream().map(this::toMap).toList());
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -149,9 +151,7 @@ public class TableReservationController {
         }
     }
 
-    // =========================================================
     // 3. USER — ยกเลิกการจองของตัวเอง
-    // =========================================================
     @PutMapping("/{id}/cancel")
     public ResponseEntity<?> cancelReservation(@PathVariable Long id) {
         Map<String, Object> response = new HashMap<>();
@@ -196,12 +196,12 @@ public class TableReservationController {
         }
     }
 
-    // =========================================================
     // 4. ADMIN — ดูการจองทั้งหมด (กรองตามวันได้)
-    // =========================================================
     @GetMapping("/admin/all")
-    public ResponseEntity<?> getAllReservations(
-            @RequestParam(required = false) String date) {
+    public ResponseEntity<?> getAllReservations(@RequestParam(required = false) String date) {
+        if (!isAdmin())
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message", "ไม่มีสิทธิ์เข้าถึง"));
         try {
             List<TableReservationEntity> list;
             if (date != null && !date.isBlank()) {
@@ -217,13 +217,12 @@ public class TableReservationController {
         }
     }
 
-    // =========================================================
     // 5. ADMIN — เปลี่ยนสถานะการจอง
-    // =========================================================
     @PutMapping("/admin/{id}/status")
-    public ResponseEntity<?> updateStatus(
-            @PathVariable Long id,
-            @RequestBody Map<String, String> request) {
+    public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestBody Map<String, String> request) {
+        if (!isAdmin())
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message", "ไม่มีสิทธิ์เข้าถึง"));
         Map<String, Object> response = new HashMap<>();
         try {
             String newStatus = request.get("status");
@@ -253,9 +252,7 @@ public class TableReservationController {
         }
     }
 
-    // =========================================================
     // 6. PUBLIC — ดูช่วงเวลาว่างของโต๊ะ (ไม่ต้อง login)
-    // =========================================================
     @GetMapping("/availability")
     public ResponseEntity<?> getAvailability(
             @RequestParam String tableNo,
@@ -264,9 +261,9 @@ public class TableReservationController {
             LocalDate targetDate = LocalDate.parse(date, DateTimeFormatter.ISO_LOCAL_DATE);
 
             // ดึงการจองที่ active ของโต๊ะนั้นในวันนั้น
-            List<TableReservationEntity> booked =
-                reservationRepository.findByTableNoAndReservationDateOrderByReservationTimeAsc(
-                    tableNo, targetDate);
+            List<TableReservationEntity> booked = reservationRepository
+                    .findByTableNoAndReservationDateOrderByReservationTimeAsc(
+                            tableNo, targetDate);
             Set<LocalTime> bookedTimes = new HashSet<>();
             for (TableReservationEntity r : booked) {
                 if (!"cancelled".equals(r.getStatus())) {
@@ -286,10 +283,9 @@ public class TableReservationController {
             }
 
             return ResponseEntity.ok(Map.of(
-                "tableNo", tableNo,
-                "date", date,
-                "slots", slots
-            ));
+                    "tableNo", tableNo,
+                    "date", date,
+                    "slots", slots));
         } catch (DateTimeParseException e) {
             return ResponseEntity.badRequest()
                     .body(Map.of("message", "รูปแบบวันที่ไม่ถูกต้อง (yyyy-MM-dd)"));
@@ -313,9 +309,11 @@ public class TableReservationController {
         m.put("email", r.getEmail());
         m.put("tableNo", r.getTableNo());
         m.put("reservationDate", r.getReservationDate() != null
-                ? r.getReservationDate().format(DateTimeFormatter.ISO_LOCAL_DATE) : null);
+                ? r.getReservationDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
+                : null);
         m.put("reservationTime", r.getReservationTime() != null
-                ? r.getReservationTime().format(DateTimeFormatter.ofPattern("HH:mm")) : null);
+                ? r.getReservationTime().format(DateTimeFormatter.ofPattern("HH:mm"))
+                : null);
         m.put("partySize", r.getPartySize());
         m.put("customerName", r.getCustomerName());
         m.put("customerPhone", r.getCustomerPhone());
@@ -323,9 +321,11 @@ public class TableReservationController {
         m.put("status", r.getStatus());
         m.put("reservationCode", r.getReservationCode());
         m.put("createdAt", r.getCreatedAt() != null
-                ? r.getCreatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) : null);
+                ? r.getCreatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                : null);
         m.put("updatedAt", r.getUpdatedAt() != null
-                ? r.getUpdatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) : null);
+                ? r.getUpdatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                : null);
         return m;
     }
 }
