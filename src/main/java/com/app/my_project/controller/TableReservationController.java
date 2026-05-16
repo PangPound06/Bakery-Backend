@@ -24,8 +24,8 @@ public class TableReservationController {
     private TableReservationRepository reservationRepository;
 
     // ─── ช่วงเวลาที่รับจอง (ปรับตามร้าน) ───────────────────────────────────
-    private static final LocalTime OPEN_TIME  = LocalTime.of(9, 0);
-    private static final LocalTime CLOSE_TIME = LocalTime.of(21, 0);
+    private static final LocalTime OPEN_TIME  = LocalTime.of(10, 0);
+    private static final LocalTime CLOSE_TIME = LocalTime.of(20, 0);
     private static final int SLOT_MINUTES     = 30; // ทุก 30 นาที
 
     // ─── สถานะที่ admin เปลี่ยนได้ ──────────────────────────────────────────
