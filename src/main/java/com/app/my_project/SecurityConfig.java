@@ -63,8 +63,7 @@ public class SecurityConfig {
                 config.setAllowedMethods(java.util.List.of(
                                 "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
 
-                config.setAllowedHeaders(java.util.List.of(
-                                "Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"));
+                config.setAllowedHeaders(java.util.List.of("*"));
 
                 config.setExposedHeaders(java.util.List.of("Authorization"));
                 config.setAllowCredentials(true);
