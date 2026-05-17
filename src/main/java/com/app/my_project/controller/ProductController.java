@@ -4,6 +4,8 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -19,8 +21,9 @@ import javax.sql.DataSource;
 
 @RestController
 @RequestMapping("/api/products")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class ProductController {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductController.class);
 
     @Value("${jwt.secret}")
     private String jwtSecret;
@@ -214,7 +217,7 @@ public class ProductController {
                 return ResponseEntity.ok(products);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ErrorResponse("เกิดข้อผิดพลาด: " + e.getMessage()));
         }
@@ -235,7 +238,7 @@ public class ProductController {
                 }
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ErrorResponse("เกิดข้อผิดพลาด: " + e.getMessage()));
         }
@@ -255,7 +258,7 @@ public class ProductController {
                 }
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ErrorResponse("เกิดข้อผิดพลาด: " + e.getMessage()));
         }
@@ -313,7 +316,7 @@ public class ProductController {
                         .body(new ErrorResponse("ไม่สามารถเพิ่มสินค้าได้"));
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ErrorResponse("เกิดข้อผิดพลาด: " + e.getMessage()));
         }
@@ -374,7 +377,7 @@ public class ProductController {
                             .body(new ErrorResponse("ไม่สามารถแก้ไขสินค้าได้"));
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ErrorResponse("เกิดข้อผิดพลาด: " + e.getMessage()));
         }
@@ -405,7 +408,7 @@ public class ProductController {
                             .body(new ErrorResponse("ไม่สามารถลบสินค้าได้"));
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ErrorResponse("เกิดข้อผิดพลาด: " + e.getMessage()));
         }

@@ -3,6 +3,8 @@ package com.app.my_project.controller;
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -15,8 +17,9 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/slip")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class SlipController {
+
+    private static final Logger log = LoggerFactory.getLogger(SlipController.class);
 
     @Value("${cloudinary.cloud-name}")
     private String cloudName;
@@ -85,7 +88,7 @@ public class SlipController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาดในการอัพโหลด: " + e.getMessage());
             return ResponseEntity.badRequest().body(response);
@@ -145,7 +148,7 @@ public class SlipController {
             response.put("message", "ไม่พบ QR Code ในสลิป");
             return ResponseEntity.ok(response);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
             return ResponseEntity.ok(response);

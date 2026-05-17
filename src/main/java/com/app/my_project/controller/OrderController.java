@@ -9,6 +9,9 @@ import com.app.my_project.repository.OrderItemRepository;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,9 +22,9 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/orders")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class OrderController {
 
+    private static final Logger log = LoggerFactory.getLogger(OrderController.class);
     private static final int FRESH_STOCK_VALUE = 9999;
 
     @Autowired
@@ -97,6 +100,9 @@ public class OrderController {
         }
     }
 
+    // ✅ @Transactional: ถ้าพังกลางทาง จะ rollback ทั้งหมด
+    // (เดิม: save order → save items → update stock เป็น 3 step แยก ถ้าพังตรงไหน data จะค้าง)
+    @org.springframework.transaction.annotation.Transactional
     @PostMapping
     public ResponseEntity<?> createOrder(@RequestBody Map<String, Object> request) {
         Map<String, Object> response = new HashMap<>();
@@ -197,7 +203,7 @@ public class OrderController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error in OrderController", e);
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
             return ResponseEntity.badRequest().body(response);
@@ -211,14 +217,14 @@ public class OrderController {
             @PathVariable String email) {
         Long userId = getUserIdFromToken(authHeader);
         if (userId == null)
-            return ResponseEntity.status(401)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
 
         if (!isAdmin(userId)) {
             String tokenEmail = org.springframework.security.core.context.SecurityContextHolder
                     .getContext().getAuthentication().getName();
             if (!tokenEmail.equals(email))
-                return ResponseEntity.status(403)
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
         }
 
@@ -258,7 +264,7 @@ public class OrderController {
             @PathVariable Long id) {
         Long userId = getUserIdFromToken(authHeader);
         if (userId == null)
-            return ResponseEntity.status(401)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
 
         Map<String, Object> response = new HashMap<>();
@@ -276,7 +282,7 @@ public class OrderController {
             String tokenEmail = org.springframework.security.core.context.SecurityContextHolder
                     .getContext().getAuthentication().getName();
             if (!order.getEmail().equals(tokenEmail))
-                return ResponseEntity.status(403)
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
         }
 
@@ -335,10 +341,10 @@ public class OrderController {
             @RequestBody Map<String, String> request) {
         Long userId = getUserIdFromToken(authHeader);
         if (userId == null)
-            return ResponseEntity.status(401)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
         if (!isAdmin(userId))
-            return ResponseEntity.status(403)
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
         Map<String, Object> response = new HashMap<>();
@@ -384,10 +390,10 @@ public class OrderController {
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         Long userId = getUserIdFromToken(authHeader);
         if (userId == null)
-            return ResponseEntity.status(401)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
         if (!isAdmin(userId))
-            return ResponseEntity.status(403)
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
         return ResponseEntity.ok(
@@ -415,13 +421,15 @@ public class OrderController {
     }
 
     // PUT /api/orders/{id}/cancel — Admin หรือเจ้าของ order
+    // ✅ @Transactional: ปรับ stock + update status ต้องสำเร็จด้วยกัน หรือ rollback ทั้งคู่
+    @org.springframework.transaction.annotation.Transactional
     @PutMapping("/{id}/cancel")
     public ResponseEntity<?> cancelOrder(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @PathVariable Long id) {
         Long userId = getUserIdFromToken(authHeader);
         if (userId == null)
-            return ResponseEntity.status(401)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
 
         Map<String, Object> response = new HashMap<>();
@@ -439,7 +447,7 @@ public class OrderController {
             String tokenEmail = org.springframework.security.core.context.SecurityContextHolder
                     .getContext().getAuthentication().getName();
             if (!order.getEmail().equals(tokenEmail))
-                return ResponseEntity.status(403)
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("success", false, "message", "ไม่มีสิทธิ์ยกเลิก order นี้"));
         }
 
@@ -450,24 +458,32 @@ public class OrderController {
                 return ResponseEntity.badRequest().body(response);
             }
             List<OrderItemEntity> items = orderItemRepository.findByOrderId(id);
-            try (Connection conn = getConnection()) {
-                for (OrderItemEntity item : items) {
-                    String restoreStockSql = "UPDATE tb_products " +
-                            "SET \"stockQuantity\" = \"stockQuantity\" + ?, \"isAvailable\" = true " +
-                            "WHERE id = ? AND \"stockQuantity\" != " + FRESH_STOCK_VALUE;
-                    try (PreparedStatement stockStmt = conn.prepareStatement(restoreStockSql)) {
+
+            // ✅ แก้ N+1: ใช้ batch update แทนการ execute ทีละครั้ง
+            // เดิม: N items = N round-trips ไป DB
+            // ใหม่: 1 round-trip ไม่ว่ามี item เท่าไหร่
+            if (!items.isEmpty()) {
+                String restoreStockSql = "UPDATE tb_products " +
+                        "SET \"stockQuantity\" = \"stockQuantity\" + ?, \"isAvailable\" = true " +
+                        "WHERE id = ? AND \"stockQuantity\" != " + FRESH_STOCK_VALUE;
+                try (Connection conn = getConnection();
+                     PreparedStatement stockStmt = conn.prepareStatement(restoreStockSql)) {
+                    for (OrderItemEntity item : items) {
                         stockStmt.setInt(1, item.getQuantity());
                         stockStmt.setLong(2, item.getProductId());
-                        stockStmt.executeUpdate();
+                        stockStmt.addBatch();
                     }
+                    stockStmt.executeBatch();
                 }
             }
+
             order.setOrderStatus("cancelled");
             orderRepository.save(order);
             response.put("success", true);
             response.put("message", "ยกเลิกคำสั่งซื้อสำเร็จ");
             return ResponseEntity.ok(response);
         } catch (Exception e) {
+            log.error("Failed to cancel order id={}", id, e);
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด");
             return ResponseEntity.badRequest().body(response);
@@ -480,18 +496,31 @@ public class OrderController {
         try {
             String code = orderId.toUpperCase().trim();
             Optional<OrderEntity> orderOpt = orderRepository.findByOrdCode(code);
-            if (orderOpt.isEmpty()) {
-                List<OrderEntity> allOrders = orderRepository.findAll();
-                for (OrderEntity o : allOrders) {
-                    String generated = "ORD" + String.format("%06d", o.getId() * 104729L % 1000000L) + o.getId();
-                    if (generated.equalsIgnoreCase(code)) {
-                        orderOpt = Optional.of(o);
-                        o.setOrdCode(generated);
-                        orderRepository.save(o);
-                        break;
+
+            // ✅ ถ้าหาตาม ordCode ไม่เจอ → ลอง extract id จาก code แล้ว query ตรงๆ
+            // เดิม: orderRepository.findAll() → load ทั้งตาราง! จะ OOM ถ้ามี order เยอะ
+            // ใหม่: format code คือ ORD<6digit><id> → extract id แล้ว findById ทีเดียว
+            if (orderOpt.isEmpty() && code.startsWith("ORD") && code.length() > 9) {
+                try {
+                    // ส่วนของ id อยู่หลัง 6 ตัวแรกของ ORD + 6 digit hash
+                    String idPart = code.substring(9);
+                    Long extractedId = Long.parseLong(idPart);
+                    Optional<OrderEntity> candidate = orderRepository.findById(extractedId);
+
+                    if (candidate.isPresent()) {
+                        OrderEntity o = candidate.get();
+                        String generated = "ORD" + String.format("%06d", o.getId() * 104729L % 1000000L) + o.getId();
+                        if (generated.equalsIgnoreCase(code)) {
+                            o.setOrdCode(generated);
+                            orderRepository.save(o);
+                            orderOpt = Optional.of(o);
+                        }
                     }
+                } catch (NumberFormatException ignore) {
+                    // code format ผิด — ปล่อยให้ orderOpt = empty
                 }
             }
+
             if (orderOpt.isEmpty()) {
                 response.put("success", false);
                 response.put("message", "ไม่พบคำสั่งซื้อ");
@@ -508,9 +537,10 @@ public class OrderController {
 
             response.put("success", true);
             response.put("order", order);
-            response.put("items", displayItems); // ✅ ส่ง displayItems แทน items
+            response.put("items", displayItems);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
+            log.error("Failed to search order id={}", orderId, e);
             response.put("success", false);
             response.put("message", "หมายเลขคำสั่งซื้อไม่ถูกต้อง");
             return ResponseEntity.ok(response);
@@ -636,8 +666,8 @@ public class OrderController {
                 return ResponseEntity.ok(response);
             }
         } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(500).body(new ArrayList<>());
+            log.error("Error in OrderController", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ArrayList<>());
         }
     }
 
@@ -697,7 +727,7 @@ public class OrderController {
 
             return ResponseEntity.ok(result);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error in OrderController", e);
             response.put("success", false);
             response.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(response);
@@ -713,10 +743,10 @@ public class OrderController {
 
         Long userId = getUserIdFromToken(authHeader);
         if (userId == null)
-            return ResponseEntity.status(401)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
         if (!isAdmin(userId))
-            return ResponseEntity.status(403)
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
         Map<String, Object> response = new HashMap<>();
@@ -798,7 +828,7 @@ public class OrderController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error in OrderController", e);
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
             return ResponseEntity.badRequest().body(response);
@@ -815,10 +845,10 @@ public class OrderController {
 
         Long userId = getUserIdFromToken(authHeader);
         if (userId == null)
-            return ResponseEntity.status(401)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
         if (!isAdmin(userId))
-            return ResponseEntity.status(403)
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
         Map<String, Object> response = new HashMap<>();
@@ -908,7 +938,7 @@ public class OrderController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error in OrderController", e);
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
             return ResponseEntity.badRequest().body(response);
@@ -923,10 +953,10 @@ public class OrderController {
             @PathVariable Long itemId) {
         Long userId = getUserIdFromToken(authHeader);
         if (userId == null)
-            return ResponseEntity.status(401)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("success", false, "message", "กรุณาเข้าสู่ระบบ"));
         if (!isAdmin(userId))
-            return ResponseEntity.status(403)
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("success", false, "message", "ไม่มีสิทธิ์เข้าถึง"));
 
         Map<String, Object> response = new HashMap<>();
@@ -1004,7 +1034,7 @@ public class OrderController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error in OrderController", e);
             response.put("success", false);
             response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
             return ResponseEntity.badRequest().body(response);

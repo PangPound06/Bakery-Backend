@@ -3,7 +3,9 @@ package com.app.my_project.entity;
 import jakarta.persistence.*;
 
 @Entity
-@Table(name = "tb_dinein_order_items")
+@Table(name = "tb_dinein_order_items", indexes = {
+        @Index(name = "idx_dinein_items_order_id", columnList = "orderId")
+})
 public class DineInOrderItemEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

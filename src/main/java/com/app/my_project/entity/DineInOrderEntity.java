@@ -4,7 +4,11 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "tb_dinein_orders")
+@Table(name = "tb_dinein_orders", indexes = {
+        @Index(name = "idx_dinein_email", columnList = "email"),
+        @Index(name = "idx_dinein_order_status", columnList = "orderStatus"),
+        @Index(name = "idx_dinein_created_at", columnList = "createdAt")
+})
 public class DineInOrderEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

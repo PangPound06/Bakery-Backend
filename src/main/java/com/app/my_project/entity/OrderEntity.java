@@ -3,8 +3,24 @@ package com.app.my_project.entity;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
+/**
+ * เพิ่มจากเดิม:
+ *  - @Index บนคอลัมน์ที่ query บ่อย:
+ *    - email (findByEmailOrderByCreatedAtDesc)
+ *    - created_at (sort)
+ *    - order_status (filter)
+ *    - payment_status (filter)
+ *    - ord_code (search) — แม้จะ unique อยู่แล้วก็ดีที่จะมี index ชัดเจน
+ *  ช่วยให้ query เร็วขึ้นมากเมื่อตารางใหญ่
+ */
 @Entity
-@Table(name = "tb_orders")
+@Table(name = "tb_orders", indexes = {
+        @Index(name = "idx_orders_email", columnList = "email"),
+        @Index(name = "idx_orders_created_at", columnList = "created_at"),
+        @Index(name = "idx_orders_order_status", columnList = "order_status"),
+        @Index(name = "idx_orders_payment_status", columnList = "payment_status"),
+        @Index(name = "idx_orders_ord_code", columnList = "ordCode")
+})
 public class OrderEntity {
 
     @Id
@@ -36,9 +52,8 @@ public class OrderEntity {
     @Column(name = "order_status")
     private String orderStatus;
 
-    // ✅ NEW — แยกประเภท order
     @Column(name = "order_type")
-    private String orderType; // "online" | "pos"
+    private String orderType;
 
     @Column(name = "receiver_name")
     private String receiverName;

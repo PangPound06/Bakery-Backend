@@ -1,50 +1,53 @@
 package com.app.my_project.controller;
 
+import com.app.my_project.common.ApiResponse;
 import com.app.my_project.entity.FavoriteEntity;
 import com.app.my_project.repository.FavoriteRepository;
-
-import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.*;
 
-import java.util.*;
+import java.util.List;
+import java.util.Map;
 
+/**
+ * แก้ไขจากเดิม:
+ *  - ลบ @CrossOrigin
+ *  - Constructor injection
+ *  - SLF4J logger แทน e.printStackTrace
+ *  - ใช้ ApiResponse
+ */
 @RestController
 @RequestMapping("/api/favorites")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class FavoriteController {
 
-    @Autowired
-    private FavoriteRepository favoriteRepository;
+    private static final Logger log = LoggerFactory.getLogger(FavoriteController.class);
 
-    // ดึง Favorites ของ User
-    @GetMapping("/user/{userId}")
-    public ResponseEntity<?> getFavorites(@PathVariable Long userId) {
-        List<FavoriteEntity> favorites = favoriteRepository.findByUserIdOrderByCreatedAtDesc(userId);
-        return ResponseEntity.ok(favorites);
+    private final FavoriteRepository favoriteRepository;
+
+    public FavoriteController(FavoriteRepository favoriteRepository) {
+        this.favoriteRepository = favoriteRepository;
     }
 
-    // เพิ่ม / ลบ Favorite (Toggle)
+    @GetMapping("/user/{userId}")
+    public ResponseEntity<List<FavoriteEntity>> getFavorites(@PathVariable Long userId) {
+        return ResponseEntity.ok(favoriteRepository.findByUserIdOrderByCreatedAtDesc(userId));
+    }
+
     @PostMapping("/toggle")
     @Transactional
-    public ResponseEntity<?> toggleFavorite(@RequestBody Map<String, Object> request) {
-        Map<String, Object> response = new HashMap<>();
-
+    public ResponseEntity<Map<String, Object>> toggleFavorite(@RequestBody Map<String, Object> request) {
         try {
             Long userId = Long.parseLong(request.get("userId").toString());
             Long productId = Long.parseLong(request.get("productId").toString());
 
-            // ถ้ามีอยู่แล้ว → ลบ
             if (favoriteRepository.existsByUserIdAndProductId(userId, productId)) {
                 favoriteRepository.deleteByUserIdAndProductId(userId, productId);
-                response.put("success", true);
-                response.put("action", "removed");
-                response.put("message", "ลบออกจากรายการโปรดแล้ว");
-                return ResponseEntity.ok(response);
+                return ApiResponse.ok("ลบออกจากรายการโปรดแล้ว", Map.of("action", "removed"));
             }
 
-            // ถ้ายังไม่มี → เพิ่ม
             FavoriteEntity favorite = new FavoriteEntity();
             favorite.setUserId(userId);
             favorite.setProductId(productId);
@@ -53,49 +56,34 @@ public class FavoriteController {
             favorite.setPrice(Double.parseDouble(request.get("price").toString()));
             favorite.setCategory((String) request.get("category"));
             favorite.setType((String) request.get("type"));
-
             favoriteRepository.save(favorite);
 
-            response.put("success", true);
-            response.put("action", "added");
-            response.put("message", "เพิ่มเข้ารายการโปรดแล้ว");
-            return ResponseEntity.ok(response);
-
+            return ApiResponse.ok("เพิ่มเข้ารายการโปรดแล้ว", Map.of("action", "added"));
         } catch (Exception e) {
-            e.printStackTrace();
-            response.put("success", false);
-            response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
-            return ResponseEntity.badRequest().body(response);
+            log.error("Failed to toggle favorite", e);
+            return ApiResponse.badRequest("เกิดข้อผิดพลาด: " + e.getMessage());
         }
     }
 
-    // ตรวจสอบว่าสินค้าอยู่ใน Favorites หรือไม่
     @GetMapping("/check/{userId}/{productId}")
-    public ResponseEntity<?> checkFavorite(
+    public ResponseEntity<Map<String, Object>> checkFavorite(
             @PathVariable Long userId,
             @PathVariable Long productId) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("isFavorite", favoriteRepository.existsByUserIdAndProductId(userId, productId));
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(Map.of(
+                "isFavorite", favoriteRepository.existsByUserIdAndProductId(userId, productId)));
     }
 
-    // ลบ Favorite
     @DeleteMapping("/{userId}/{productId}")
     @Transactional
-    public ResponseEntity<?> removeFavorite(
+    public ResponseEntity<Map<String, Object>> removeFavorite(
             @PathVariable Long userId,
             @PathVariable Long productId) {
-        Map<String, Object> response = new HashMap<>();
-
         try {
             favoriteRepository.deleteByUserIdAndProductId(userId, productId);
-            response.put("success", true);
-            response.put("message", "ลบออกจากรายการโปรดแล้ว");
-            return ResponseEntity.ok(response);
+            return ApiResponse.ok("ลบออกจากรายการโปรดแล้ว");
         } catch (Exception e) {
-            response.put("success", false);
-            response.put("message", "เกิดข้อผิดพลาด");
-            return ResponseEntity.badRequest().body(response);
+            log.error("Failed to remove favorite userId={} productId={}", userId, productId, e);
+            return ApiResponse.badRequest("เกิดข้อผิดพลาด");
         }
     }
 }

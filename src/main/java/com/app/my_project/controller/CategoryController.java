@@ -12,7 +12,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/categories")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class CategoryController {
 
     @Autowired

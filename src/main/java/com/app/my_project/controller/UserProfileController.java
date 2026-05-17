@@ -5,6 +5,8 @@ import com.app.my_project.entity.UserEntity;
 import com.app.my_project.repository.UserProfileRepository;
 import com.app.my_project.repository.UserRepository;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
@@ -23,8 +25,9 @@ import com.cloudinary.utils.ObjectUtils;
 
 @RestController
 @RequestMapping("/api/profile")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class UserProfileController {
+
+    private static final Logger log = LoggerFactory.getLogger(UserProfileController.class);
 
     @Autowired
     private UserProfileRepository userProfileRepository;
@@ -159,7 +162,7 @@ public class UserProfileController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.badRequest()
                     .body(Map.of("success", false, "message", "เกิดข้อผิดพลาด: " + e.getMessage()));
         }
@@ -196,7 +199,7 @@ public class UserProfileController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.badRequest()
                     .body(Map.of("success", false, "message", "อัปโหลดไม่สำเร็จ: " + e.getMessage()));
         }

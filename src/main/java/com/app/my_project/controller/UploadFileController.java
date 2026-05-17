@@ -20,7 +20,6 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/upload")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 /*
  * public class UploadFileController {
  * 

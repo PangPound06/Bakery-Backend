@@ -3,7 +3,10 @@ package com.app.my_project.entity;
 import jakarta.persistence.*;
 
 @Entity
-@Table(name = "tb_order_items")
+@Table(name = "tb_order_items", indexes = {
+        @Index(name = "idx_order_items_order_id", columnList = "order_id"),
+        @Index(name = "idx_order_items_product_id", columnList = "product_id")
+})
 public class OrderItemEntity {
 
     @Id

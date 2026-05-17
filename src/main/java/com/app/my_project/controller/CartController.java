@@ -4,6 +4,8 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -17,8 +19,9 @@ import javax.sql.DataSource;
 
 @RestController
 @RequestMapping("/api/cart")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class CartController {
+
+    private static final Logger log = LoggerFactory.getLogger(CartController.class);
 
     @Value("${jwt.secret}")
     private String jwtSecret;
@@ -220,7 +223,7 @@ public class CartController {
                 return rs.next() ? rs.getString("email") : null;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return null;
         }
     }
@@ -342,7 +345,7 @@ public class CartController {
             return ResponseEntity.ok(java.util.Collections.singletonMap("message", "เพิ่มสินค้าลงตะกร้าเรียบร้อย"));
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(java.util.Collections.singletonMap("error", e.getMessage()));
         }
@@ -398,7 +401,7 @@ public class CartController {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
@@ -452,7 +455,7 @@ public class CartController {
                         : ResponseEntity.status(HttpStatus.NOT_FOUND).build();
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
@@ -484,7 +487,7 @@ public class CartController {
                         : ResponseEntity.status(HttpStatus.NOT_FOUND).build();
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
@@ -502,7 +505,7 @@ public class CartController {
             }
             return ResponseEntity.ok().build();
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }

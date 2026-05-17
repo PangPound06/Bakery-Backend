@@ -3,7 +3,9 @@ package com.app.my_project.entity;
 import jakarta.persistence.*;
 
 @Entity
-@Table(name = "tb_userregister")
+@Table(name = "tb_userregister", indexes = {
+        @Index(name = "idx_users_google_id", columnList = "google_id")
+})
 public class UserEntity {
 
     @Id

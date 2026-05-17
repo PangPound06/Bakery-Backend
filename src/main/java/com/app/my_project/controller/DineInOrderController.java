@@ -8,6 +8,8 @@ import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
 import com.app.my_project.repository.OrderRepository;
 import com.app.my_project.repository.OrderItemRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -23,8 +25,9 @@ import java.sql.PreparedStatement;
 
 @RestController
 @RequestMapping("/api/dinein")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class DineInOrderController {
+
+    private static final Logger log = LoggerFactory.getLogger(DineInOrderController.class);
 
     @Autowired
     private DineInOrderRepository dineInOrderRepository;
@@ -149,7 +152,7 @@ public class DineInOrderController {
             response.put("ordCode", ordCode);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             response.put("success", false);
             response.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(response);

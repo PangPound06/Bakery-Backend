@@ -7,6 +7,8 @@ import com.app.my_project.repository.AdminRepository;
 import com.app.my_project.service.EmailService;
 import com.app.my_project.service.OTPService;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -18,8 +20,9 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/auth")
-@CrossOrigin(origins = { "http://localhost:3000", "https://poundbakery.vercel.app" })
 public class PasswordResetController {
+
+    private static final Logger log = LoggerFactory.getLogger(PasswordResetController.class);
 
     @Autowired
     private UserRepository userRepository;
@@ -73,7 +76,7 @@ public class PasswordResetController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error", e);
             response.put("success", false);
             response.put("message", "ไม่สามารถส่งอีเมลได้ กรุณาลองใหม่อีกครั้ง");
             return ResponseEntity.internalServerError().body(response);
