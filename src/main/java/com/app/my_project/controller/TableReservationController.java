@@ -25,10 +25,10 @@ import java.util.*;
  * Table Reservation API — refactored ใช้ DTO + @Valid
  *
  * เปลี่ยนแปลงจากเดิม:
- *  - ใช้ DTO (record) แทน Map<String, Object>
- *  - @Valid → Bean Validation อัตโนมัติ ลด boilerplate ~50%
- *  - ลบ helper toMap() ใช้ ReservationResponse.from() แทน
- *  - Return type ชัดเจนกว่าเดิม
+ * - ใช้ DTO (record) แทน Map<String, Object>
+ * - @Valid → Bean Validation อัตโนมัติ ลด boilerplate ~50%
+ * - ลบ helper toMap() ใช้ ReservationResponse.from() แทน
+ * - Return type ชัดเจนกว่าเดิม
  */
 @RestController
 @RequestMapping("/api/reservations")
@@ -47,7 +47,7 @@ public class TableReservationController {
         this.reservationRepository = reservationRepository;
     }
 
-    // ─── Helper 
+    // ─── Helper
     private String getCurrentEmail() {
         var auth = SecurityContextHolder.getContext().getAuthentication();
         return auth != null ? auth.getName() : null;
@@ -55,7 +55,8 @@ public class TableReservationController {
 
     private boolean isAdmin() {
         var auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null) return false;
+        if (auth == null)
+            return false;
         return auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
     }
@@ -64,7 +65,8 @@ public class TableReservationController {
     @PostMapping
     public ResponseEntity<?> createReservation(@Valid @RequestBody CreateReservationRequest rawRequest) {
         String email = getCurrentEmail();
-        if (email == null) return ApiResponse.unauthorized();
+        if (email == null)
+            return ApiResponse.unauthorized();
 
         // Trim whitespace
         CreateReservationRequest req = rawRequest.trimmed();
@@ -128,7 +130,8 @@ public class TableReservationController {
     @GetMapping("/my")
     public ResponseEntity<?> getMyReservations() {
         String email = getCurrentEmail();
-        if (email == null) return ApiResponse.unauthorized();
+        if (email == null)
+            return ApiResponse.unauthorized();
 
         try {
             List<ReservationResponse> list = reservationRepository
@@ -147,11 +150,13 @@ public class TableReservationController {
     @PutMapping("/{id}/cancel")
     public ResponseEntity<?> cancelReservation(@PathVariable Long id) {
         String email = getCurrentEmail();
-        if (email == null) return ApiResponse.unauthorized();
+        if (email == null)
+            return ApiResponse.unauthorized();
 
         try {
             Optional<TableReservationEntity> opt = reservationRepository.findById(id);
-            if (opt.isEmpty()) return ApiResponse.notFound("ไม่พบการจองนี้");
+            if (opt.isEmpty())
+                return ApiResponse.notFound("ไม่พบการจองนี้");
 
             TableReservationEntity reservation = opt.get();
 
@@ -181,7 +186,8 @@ public class TableReservationController {
     // 4. ADMIN — ดูการจองทั้งหมด (กรองตามวันได้)
     @GetMapping("/admin/all")
     public ResponseEntity<?> getAllReservations(@RequestParam(required = false) String date) {
-        if (!isAdmin()) return ApiResponse.forbidden();
+        if (!isAdmin())
+            return ApiResponse.forbidden();
 
         try {
             List<TableReservationEntity> entities;
@@ -204,11 +210,13 @@ public class TableReservationController {
     public ResponseEntity<?> updateStatus(
             @PathVariable Long id,
             @Valid @RequestBody UpdateReservationStatusRequest request) {
-        if (!isAdmin()) return ApiResponse.forbidden();
+        if (!isAdmin())
+            return ApiResponse.forbidden();
 
         try {
             Optional<TableReservationEntity> opt = reservationRepository.findById(id);
-            if (opt.isEmpty()) return ApiResponse.notFound("ไม่พบการจองนี้");
+            if (opt.isEmpty())
+                return ApiResponse.notFound("ไม่พบการจองนี้");
 
             TableReservationEntity reservation = opt.get();
             reservation.setStatus(request.status());
@@ -227,7 +235,7 @@ public class TableReservationController {
     // 6. PUBLIC — ดูช่วงเวลาว่างของโต๊ะ
     @GetMapping("/availability")
     public ResponseEntity<?> getAvailability(@RequestParam String tableNo,
-                                             @RequestParam String date) {
+            @RequestParam String date) {
         try {
             LocalDate targetDate = LocalDate.parse(date, DateTimeFormatter.ISO_LOCAL_DATE);
 
@@ -264,10 +272,132 @@ public class TableReservationController {
         }
     }
 
-    // ─── Private helpers 
+    // ─── Private helpers
     private String generateReservationCode(LocalDate date) {
         String dateStr = date.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         String random = String.format("%04d", new Random().nextInt(10000));
         return "RES-" + dateStr + "-" + random;
+    }
+
+    // 7. ADMIN — แก้ไขข้อมูลการจอง (ทุก field)
+    @PutMapping("/admin/{id}")
+    public ResponseEntity<?> updateReservation(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> request) {
+        if (!isAdmin())
+            return ApiResponse.forbidden();
+
+        try {
+            Optional<TableReservationEntity> opt = reservationRepository.findById(id);
+            if (opt.isEmpty())
+                return ApiResponse.notFound("ไม่พบการจองนี้");
+
+            TableReservationEntity r = opt.get();
+
+            // ── Parse และ update fields ที่ส่งมา ──
+            if (request.containsKey("tableNo")) {
+                r.setTableNo((String) request.get("tableNo"));
+            }
+            if (request.containsKey("reservationDate")) {
+                try {
+                    r.setReservationDate(LocalDate.parse(
+                            (String) request.get("reservationDate"),
+                            DateTimeFormatter.ISO_LOCAL_DATE));
+                } catch (DateTimeParseException e) {
+                    return ApiResponse.badRequest("รูปแบบวันที่ไม่ถูกต้อง");
+                }
+            }
+            if (request.containsKey("reservationTime")) {
+                try {
+                    r.setReservationTime(LocalTime.parse(
+                            (String) request.get("reservationTime"), TIME_FMT));
+                } catch (DateTimeParseException e) {
+                    return ApiResponse.badRequest("รูปแบบเวลาไม่ถูกต้อง");
+                }
+            }
+            if (request.containsKey("partySize")) {
+                Object ps = request.get("partySize");
+                int partySize = (ps instanceof Integer) ? (Integer) ps
+                        : Integer.parseInt(ps.toString());
+                if (partySize < 1 || partySize > 20) {
+                    return ApiResponse.badRequest("จำนวนคนต้องอยู่ระหว่าง 1-20");
+                }
+                r.setPartySize(partySize);
+            }
+            if (request.containsKey("customerName")) {
+                r.setCustomerName(((String) request.get("customerName")).trim());
+            }
+            if (request.containsKey("customerPhone")) {
+                r.setCustomerPhone(((String) request.get("customerPhone")).trim());
+            }
+            if (request.containsKey("note")) {
+                r.setNote((String) request.get("note"));
+            }
+
+            // ── ตรวจ conflict (ถ้าเปลี่ยน table/date/time) ──
+            List<TableReservationEntity> conflicts = reservationRepository.findConflicting(
+                    r.getTableNo(), r.getReservationDate(), r.getReservationTime());
+            // ไม่นับตัวเอง
+            boolean hasConflict = conflicts.stream().anyMatch(c -> !c.getId().equals(id));
+            if (hasConflict) {
+                return ApiResponse.error(HttpStatus.CONFLICT,
+                        "โต๊ะ " + r.getTableNo() + " ถูกจองในเวลานี้แล้ว");
+            }
+
+            r.setUpdatedAt(LocalDateTime.now());
+            reservationRepository.save(r);
+
+            return ApiResponse.ok("แก้ไขข้อมูลสำเร็จ",
+                    Map.of("reservation", toMap(r)));
+
+        } catch (Exception e) {
+            log.error("Failed to update reservation id={}", id, e);
+            return ApiResponse.serverError("เกิดข้อผิดพลาด: " + e.getMessage());
+        }
+    }
+
+    // 8. ADMIN — ลบการจอง (hard delete)
+    @DeleteMapping("/admin/{id}")
+    public ResponseEntity<?> deleteReservation(@PathVariable Long id) {
+        if (!isAdmin())
+            return ApiResponse.forbidden();
+
+        try {
+            if (!reservationRepository.existsById(id)) {
+                return ApiResponse.notFound("ไม่พบการจองนี้");
+            }
+            reservationRepository.deleteById(id);
+            return ApiResponse.ok("ลบการจองสำเร็จ");
+        } catch (Exception e) {
+            log.error("Failed to delete reservation id={}", id, e);
+            return ApiResponse.serverError("เกิดข้อผิดพลาด: " + e.getMessage());
+        }
+    }
+
+    // ─── Helper: แปลง entity → Map 
+    private Map<String, Object> toMap(TableReservationEntity r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.getId());
+        m.put("email", r.getEmail());
+        m.put("tableNo", r.getTableNo());
+        m.put("reservationDate", r.getReservationDate() != null
+                ? r.getReservationDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
+                : null);
+        m.put("reservationTime", r.getReservationTime() != null
+                ? r.getReservationTime().format(TIME_FMT)
+                : null);
+        m.put("partySize", r.getPartySize());
+        m.put("customerName", r.getCustomerName());
+        m.put("customerPhone", r.getCustomerPhone());
+        m.put("note", r.getNote());
+        m.put("status", r.getStatus());
+        m.put("reservationCode", r.getReservationCode());
+        m.put("createdAt", r.getCreatedAt() != null
+                ? r.getCreatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                : null);
+        m.put("updatedAt", r.getUpdatedAt() != null
+                ? r.getUpdatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                : null);
+        return m;
     }
 }
