@@ -20,12 +20,12 @@ import java.util.Optional;
  * Admin authentication & management
  *
  * แก้ไขจากเดิม:
- *  - ลบ @CrossOrigin (ใช้ SecurityConfig จัดการ)
- *  - ลบ helper getAdminIdFromToken/isAdmin (ย้ายไป JwtService)
- *  - generateToken ใส่ role claim "ADMIN"
- *  - ใช้ ApiResponse + AuthGuard → โค้ดสั้นลงครึ่งหนึ่ง
- *  - ใช้ constructor injection
- *  - เปลี่ยน e.printStackTrace → SLF4J logger
+ * - ลบ @CrossOrigin (ใช้ SecurityConfig จัดการ)
+ * - ลบ helper getAdminIdFromToken/isAdmin (ย้ายไป JwtService)
+ * - generateToken ใส่ role claim "ADMIN"
+ * - ใช้ ApiResponse + AuthGuard → โค้ดสั้นลงครึ่งหนึ่ง
+ * - ใช้ constructor injection
+ * - เปลี่ยน e.printStackTrace → SLF4J logger
  */
 @RestController
 @RequestMapping("/api/admin")
@@ -40,10 +40,10 @@ public class AdminAuthController {
     private final AuthGuard authGuard;
 
     public AdminAuthController(AdminRepository adminRepository,
-                               UserRepository userRepository,
-                               BCryptPasswordEncoder passwordEncoder,
-                               JwtService jwtService,
-                               AuthGuard authGuard) {
+            UserRepository userRepository,
+            BCryptPasswordEncoder passwordEncoder,
+            JwtService jwtService,
+            AuthGuard authGuard) {
         this.adminRepository = adminRepository;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
@@ -62,9 +62,7 @@ public class AdminAuthController {
         return data;
     }
 
-    // ═══════════════════════════════════════════════════════════════════
     // LOGIN ADMIN
-    // ═══════════════════════════════════════════════════════════════════
     @PostMapping("/login")
     public ResponseEntity<?> loginAdmin(@RequestBody Map<String, String> request) {
         String email = request.get("email");
@@ -100,9 +98,7 @@ public class AdminAuthController {
         return ApiResponse.ok("เข้าสู่ระบบสำเร็จ", data);
     }
 
-    // ═══════════════════════════════════════════════════════════════════
     // ADMIN MANAGEMENT (admin only)
-    // ═══════════════════════════════════════════════════════════════════
     @PostMapping("/register")
     public ResponseEntity<Map<String, Object>> registerAdmin(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
@@ -148,9 +144,14 @@ public class AdminAuthController {
     @GetMapping("/list")
     public ResponseEntity<?> getAllAdmins(
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        return authGuard.withAdmin(authHeader, adminId ->
-                ResponseEntity.ok(Map.of("data",
-                        adminRepository.findAll().stream().map(this::buildAdminData).toList())));
+        if (authGuard.requireAuth(authHeader) == null)
+            return ApiResponse.unauthorized();
+        if (!authGuard.isAdmin(authHeader))
+            return ApiResponse.forbidden();
+
+        // ✅ ส่ง array โดยตรง compat กับ frontend
+        return ResponseEntity.ok(
+                adminRepository.findAll().stream().map(this::buildAdminData).toList());
     }
 
     @GetMapping("/{id}")
@@ -159,7 +160,8 @@ public class AdminAuthController {
             @PathVariable Long id) {
         return authGuard.withAdmin(authHeader, adminId -> {
             Optional<AdminEntity> adminOpt = adminRepository.findById(id);
-            if (adminOpt.isEmpty()) return ApiResponse.notFound("ไม่พบ Admin");
+            if (adminOpt.isEmpty())
+                return ApiResponse.notFound("ไม่พบ Admin");
             return ApiResponse.ok(Map.of("admin", buildAdminData(adminOpt.get())));
         });
     }
@@ -171,13 +173,17 @@ public class AdminAuthController {
             @RequestBody Map<String, String> request) {
         return authGuard.withAdmin(authHeader, adminId -> {
             Optional<AdminEntity> adminOpt = adminRepository.findById(id);
-            if (adminOpt.isEmpty()) return ApiResponse.notFound("ไม่พบ Admin");
+            if (adminOpt.isEmpty())
+                return ApiResponse.notFound("ไม่พบ Admin");
 
             try {
                 AdminEntity admin = adminOpt.get();
-                if (request.containsKey("fullname")) admin.setFullname(request.get("fullname"));
-                if (request.containsKey("role")) admin.setRole(request.get("role"));
-                if (request.containsKey("status")) admin.setStatus(request.get("status"));
+                if (request.containsKey("fullname"))
+                    admin.setFullname(request.get("fullname"));
+                if (request.containsKey("role"))
+                    admin.setRole(request.get("role"));
+                if (request.containsKey("status"))
+                    admin.setStatus(request.get("status"));
                 if (request.containsKey("password") && !request.get("password").isEmpty()) {
                     admin.setPassword(passwordEncoder.encode(request.get("password")));
                 }
@@ -197,7 +203,8 @@ public class AdminAuthController {
             @PathVariable Long id) {
         return authGuard.withAdmin(authHeader, adminId -> {
             Optional<AdminEntity> adminOpt = adminRepository.findById(id);
-            if (adminOpt.isEmpty()) return ApiResponse.notFound("ไม่พบ Admin");
+            if (adminOpt.isEmpty())
+                return ApiResponse.notFound("ไม่พบ Admin");
 
             try {
                 AdminEntity admin = adminOpt.get();
@@ -219,7 +226,8 @@ public class AdminAuthController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @PathVariable Long id) {
         return authGuard.withAdmin(authHeader, adminId -> {
-            if (!adminRepository.existsById(id)) return ApiResponse.notFound("ไม่พบ Admin");
+            if (!adminRepository.existsById(id))
+                return ApiResponse.notFound("ไม่พบ Admin");
 
             try {
                 adminRepository.deleteById(id);

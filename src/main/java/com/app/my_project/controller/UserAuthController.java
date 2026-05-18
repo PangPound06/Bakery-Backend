@@ -36,13 +36,14 @@ import java.util.Optional;
  * User authentication & management
  *
  * แก้ไขจากเดิม:
- *  - ลบ @CrossOrigin (ใช้ SecurityConfig จัดการ)
- *  - ใช้ JwtService แทน inline JWT code
- *  - login admin ผ่าน /api/auth/login ก็ต้องใส่ role="ADMIN" (เดิมใส่ผิดเป็น USER!)
- *  - ใช้ AuthGuard + ApiResponse → โค้ดสั้นลงเยอะ
- *  - Constructor injection แทน field injection
- *  - SLF4J logger แทน e.printStackTrace
- *  - แยก helper findOrCreateGoogleUser ให้อ่านง่าย
+ * - ลบ @CrossOrigin (ใช้ SecurityConfig จัดการ)
+ * - ใช้ JwtService แทน inline JWT code
+ * - login admin ผ่าน /api/auth/login ก็ต้องใส่ role="ADMIN" (เดิมใส่ผิดเป็น
+ * USER!)
+ * - ใช้ AuthGuard + ApiResponse → โค้ดสั้นลงเยอะ
+ * - Constructor injection แทน field injection
+ * - SLF4J logger แทน e.printStackTrace
+ * - แยก helper findOrCreateGoogleUser ให้อ่านง่าย
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -61,21 +62,25 @@ public class UserAuthController {
     private final JwtService jwtService;
     private final AuthGuard authGuard;
 
-    @Value("${google.client.id}") private String clientId;
-    @Value("${google.client.secret}") private String clientSecret;
-    @Value("${google.redirect.uri}") private String redirectUri;
-    @Value("${frontend.url}") private String frontendUrl;
+    @Value("${google.client.id}")
+    private String clientId;
+    @Value("${google.client.secret}")
+    private String clientSecret;
+    @Value("${google.redirect.uri}")
+    private String redirectUri;
+    @Value("${frontend.url}")
+    private String frontendUrl;
 
     public UserAuthController(UserRepository userRepository,
-                              AdminRepository adminRepository,
-                              BCryptPasswordEncoder passwordEncoder,
-                              UserProfileRepository userProfileRepository,
-                              OrderRepository orderRepository,
-                              OrderItemRepository orderItemRepository,
-                              FavoriteRepository favoriteRepository,
-                              DataSource dataSource,
-                              JwtService jwtService,
-                              AuthGuard authGuard) {
+            AdminRepository adminRepository,
+            BCryptPasswordEncoder passwordEncoder,
+            UserProfileRepository userProfileRepository,
+            OrderRepository orderRepository,
+            OrderItemRepository orderItemRepository,
+            FavoriteRepository favoriteRepository,
+            DataSource dataSource,
+            JwtService jwtService,
+            AuthGuard authGuard) {
         this.userRepository = userRepository;
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
@@ -108,9 +113,7 @@ public class UserAuthController {
         return data;
     }
 
-    // ═══════════════════════════════════════════════════════════════════
     // LOGIN — รองรับทั้ง admin และ user
-    // ═══════════════════════════════════════════════════════════════════
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody Map<String, String> request) {
         String email = request.get("email");
@@ -161,9 +164,7 @@ public class UserAuthController {
         return ApiResponse.badRequest("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
     }
 
-    // ═══════════════════════════════════════════════════════════════════
     // GOOGLE OAUTH
-    // ═══════════════════════════════════════════════════════════════════
     @GetMapping("/google")
     public void googleLogin(HttpServletResponse httpResponse) throws Exception {
         String googleAuthUrl = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -322,22 +323,25 @@ public class UserAuthController {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
     // USER MANAGEMENT
-    // ═══════════════════════════════════════════════════════════════════
     @GetMapping("/users")
     public ResponseEntity<?> getAllUsers(
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        return authGuard.withAdmin(authHeader, adminId -> {
-            List<Map<String, Object>> users = userRepository.findAll().stream().map(user -> {
-                Map<String, Object> u = new HashMap<>();
-                u.put("id", user.getId());
-                u.put("email", user.getEmail());
-                u.put("profileImage", user.getProfileImage());
-                return u;
-            }).toList();
-            return ResponseEntity.ok(Map.of("data", users));
-        });
+        if (authGuard.requireAuth(authHeader) == null)
+            return ApiResponse.unauthorized();
+        if (!authGuard.isAdmin(authHeader))
+            return ApiResponse.forbidden();
+
+        List<Map<String, Object>> users = userRepository.findAll().stream().map(user -> {
+            Map<String, Object> u = new HashMap<>();
+            u.put("id", user.getId());
+            u.put("email", user.getEmail());
+            u.put("profileImage", user.getProfileImage());
+            return u;
+        }).toList();
+
+        // ✅ ส่ง array โดยตรง compat กับ frontend
+        return ResponseEntity.ok(users);
     }
 
     @GetMapping("/user/{id}")
@@ -351,7 +355,8 @@ public class UserAuthController {
             }
 
             Optional<UserEntity> userOpt = userRepository.findById(id);
-            if (userOpt.isEmpty()) return ApiResponse.notFound("ไม่พบผู้ใช้");
+            if (userOpt.isEmpty())
+                return ApiResponse.notFound("ไม่พบผู้ใช้");
 
             return ApiResponse.ok(Map.of("user", buildUserData(userOpt.get())));
         });
@@ -364,14 +369,17 @@ public class UserAuthController {
             @RequestBody Map<String, String> request) {
         return authGuard.withAuth(authHeader, tokenUserId -> {
             // เฉพาะเจ้าของเท่านั้น
-            if (!tokenUserId.equals(id)) return ApiResponse.forbidden();
+            if (!tokenUserId.equals(id))
+                return ApiResponse.forbidden();
 
             Optional<UserEntity> userOpt = userRepository.findById(id);
-            if (userOpt.isEmpty()) return ApiResponse.notFound("ไม่พบผู้ใช้");
+            if (userOpt.isEmpty())
+                return ApiResponse.notFound("ไม่พบผู้ใช้");
 
             try {
                 UserEntity user = userOpt.get();
-                if (request.containsKey("fullname")) user.setFullname(request.get("fullname"));
+                if (request.containsKey("fullname"))
+                    user.setFullname(request.get("fullname"));
 
                 if (request.containsKey("password") && !request.get("password").isEmpty()) {
                     String currentPassword = request.get("currentPassword");
@@ -413,7 +421,8 @@ public class UserAuthController {
             }
 
             Optional<UserEntity> userOpt = userRepository.findById(id);
-            if (userOpt.isEmpty()) return ApiResponse.notFound("ไม่พบผู้ใช้");
+            if (userOpt.isEmpty())
+                return ApiResponse.notFound("ไม่พบผู้ใช้");
 
             try {
                 UserEntity user = userOpt.get();
@@ -428,7 +437,7 @@ public class UserAuthController {
 
                 // tb_cart ไม่มี JPA repo → ต้องใช้ JDBC
                 try (Connection conn = dataSource.getConnection();
-                     PreparedStatement stmt = conn.prepareStatement("DELETE FROM tb_cart WHERE email = ?")) {
+                        PreparedStatement stmt = conn.prepareStatement("DELETE FROM tb_cart WHERE email = ?")) {
                     stmt.setString(1, email);
                     stmt.executeUpdate();
                 }

@@ -47,7 +47,7 @@ public class TableReservationController {
         this.reservationRepository = reservationRepository;
     }
 
-    // ─── Helper ──────────────────────────────────────────────────────
+    // ─── Helper 
     private String getCurrentEmail() {
         var auth = SecurityContextHolder.getContext().getAuthentication();
         return auth != null ? auth.getName() : null;
@@ -60,9 +60,7 @@ public class TableReservationController {
                 .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // 1. USER — สร้างการจอง (ใช้ DTO + @Valid)
-    // ═══════════════════════════════════════════════════════════════
     @PostMapping
     public ResponseEntity<?> createReservation(@Valid @RequestBody CreateReservationRequest rawRequest) {
         String email = getCurrentEmail();
@@ -126,9 +124,7 @@ public class TableReservationController {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // 2. USER — ดูการจองของตัวเอง
-    // ═══════════════════════════════════════════════════════════════
     @GetMapping("/my")
     public ResponseEntity<?> getMyReservations() {
         String email = getCurrentEmail();
@@ -147,9 +143,7 @@ public class TableReservationController {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // 3. USER — ยกเลิกการจองของตัวเอง (หรือ admin)
-    // ═══════════════════════════════════════════════════════════════
     @PutMapping("/{id}/cancel")
     public ResponseEntity<?> cancelReservation(@PathVariable Long id) {
         String email = getCurrentEmail();
@@ -184,9 +178,7 @@ public class TableReservationController {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // 4. ADMIN — ดูการจองทั้งหมด (กรองตามวันได้)
-    // ═══════════════════════════════════════════════════════════════
     @GetMapping("/admin/all")
     public ResponseEntity<?> getAllReservations(@RequestParam(required = false) String date) {
         if (!isAdmin()) return ApiResponse.forbidden();
@@ -207,9 +199,7 @@ public class TableReservationController {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // 5. ADMIN — เปลี่ยนสถานะการจอง (ใช้ DTO + @Valid)
-    // ═══════════════════════════════════════════════════════════════
     @PutMapping("/admin/{id}/status")
     public ResponseEntity<?> updateStatus(
             @PathVariable Long id,
@@ -234,9 +224,7 @@ public class TableReservationController {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // 6. PUBLIC — ดูช่วงเวลาว่างของโต๊ะ
-    // ═══════════════════════════════════════════════════════════════
     @GetMapping("/availability")
     public ResponseEntity<?> getAvailability(@RequestParam String tableNo,
                                              @RequestParam String date) {
@@ -276,7 +264,7 @@ public class TableReservationController {
         }
     }
 
-    // ─── Private helpers ───────────────────────────────────────────
+    // ─── Private helpers 
     private String generateReservationCode(LocalDate date) {
         String dateStr = date.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         String random = String.format("%04d", new Random().nextInt(10000));
