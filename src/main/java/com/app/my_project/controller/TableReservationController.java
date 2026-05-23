@@ -14,6 +14,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
+import com.app.my_project.service.ReservationSseService;
+
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -42,9 +44,12 @@ public class TableReservationController {
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
 
     private final TableReservationRepository reservationRepository;
+    private final ReservationSseService sseService;
 
-    public TableReservationController(TableReservationRepository reservationRepository) {
+    public TableReservationController(TableReservationRepository reservationRepository,
+            ReservationSseService sseService) {
         this.reservationRepository = reservationRepository;
+        this.sseService = sseService;
     }
 
     // ─── Helper
@@ -113,6 +118,7 @@ public class TableReservationController {
             reservation.setUpdatedAt(LocalDateTime.now());
 
             TableReservationEntity saved = reservationRepository.save(reservation);
+            sseService.broadcast("CREATED", saved.getId(), ReservationResponse.from(saved));
 
             // ── Return DTO ──
             Map<String, Object> data = new HashMap<>();
@@ -173,6 +179,7 @@ public class TableReservationController {
             reservation.setStatus("cancelled");
             reservation.setUpdatedAt(LocalDateTime.now());
             reservationRepository.save(reservation);
+            sseService.broadcast("STATUS_CHANGED", reservation.getId(), ReservationResponse.from(reservation));
 
             return ApiResponse.ok("ยกเลิกการจองสำเร็จ",
                     Map.of("reservation", ReservationResponse.from(reservation)));
@@ -222,6 +229,7 @@ public class TableReservationController {
             reservation.setStatus(request.status());
             reservation.setUpdatedAt(LocalDateTime.now());
             reservationRepository.save(reservation);
+            sseService.broadcast("STATUS_CHANGED", reservation.getId(), ReservationResponse.from(reservation));
 
             return ApiResponse.ok("อัปเดตสถานะสำเร็จ",
                     Map.of("reservation", ReservationResponse.from(reservation)));
@@ -346,6 +354,7 @@ public class TableReservationController {
 
             r.setUpdatedAt(LocalDateTime.now());
             reservationRepository.save(r);
+            sseService.broadcast("UPDATED", r.getId(), ReservationResponse.from(r));
 
             return ApiResponse.ok("แก้ไขข้อมูลสำเร็จ",
                     Map.of("reservation", toMap(r)));
@@ -367,6 +376,7 @@ public class TableReservationController {
                 return ApiResponse.notFound("ไม่พบการจองนี้");
             }
             reservationRepository.deleteById(id);
+            sseService.broadcast("DELETED", id, null);
             return ApiResponse.ok("ลบการจองสำเร็จ");
         } catch (Exception e) {
             log.error("Failed to delete reservation id={}", id, e);
@@ -374,7 +384,7 @@ public class TableReservationController {
         }
     }
 
-    // ─── Helper: แปลง entity → Map 
+    // ─── Helper: แปลง entity → Map
     private Map<String, Object> toMap(TableReservationEntity r) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", r.getId());

@@ -26,11 +26,11 @@ import java.util.Optional;
  * JWT authentication filter
  *
  * เปลี่ยนแปลงจากเดิม:
- *  1) อ่าน "role" claim จาก JWT (token ใหม่จะมี ADMIN/USER)
- *  2) Set authority (ROLE_ADMIN/ROLE_USER) เข้า SecurityContext
- *     - ทำให้ใช้ @PreAuthorize("hasRole('ADMIN')") ได้
- *     - แก้ปัญหา 403 Forbidden ในหน้า admin
- *  3) Fallback: ถ้า token เก่าไม่มี role claim ก็ตรวจจาก DB
+ * 1) อ่าน "role" claim จาก JWT (token ใหม่จะมี ADMIN/USER)
+ * 2) Set authority (ROLE_ADMIN/ROLE_USER) เข้า SecurityContext
+ * - ทำให้ใช้ @PreAuthorize("hasRole('ADMIN')") ได้
+ * - แก้ปัญหา 403 Forbidden ในหน้า admin
+ * 3) Fallback: ถ้า token เก่าไม่มี role claim ก็ตรวจจาก DB
  */
 public class JwtAuthFilter extends OncePerRequestFilter {
 
@@ -49,16 +49,15 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
-                                    HttpServletResponse response,
-                                    FilterChain filterChain)
+            HttpServletResponse response,
+            FilterChain filterChain)
             throws ServletException, IOException {
 
-        String header = request.getHeader("Authorization");
+        String token = extractToken(request);
 
-        if (header != null && header.startsWith("Bearer ")
+        if (token != null
                 && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                String token = header.substring(7);
                 DecodedJWT decoded = JWT.require(Algorithm.HMAC256(jwtSecret))
                         .withIssuer(ISSUER)
                         .build()
@@ -70,11 +69,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 AuthInfo authInfo = resolveAuthority(userId, roleClaim);
 
                 if (authInfo != null) {
-                    UsernamePasswordAuthenticationToken auth =
-                            new UsernamePasswordAuthenticationToken(
-                                    authInfo.email,
-                                    null,
-                                    List.of(new SimpleGrantedAuthority(authInfo.authority)));
+                    UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                            authInfo.email,
+                            null,
+                            List.of(new SimpleGrantedAuthority(authInfo.authority)));
                     SecurityContextHolder.getContext().setAuthentication(auth);
                 }
             } catch (Exception e) {
@@ -83,6 +81,25 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * อ่าน JWT จาก Authorization header หรือ query string
+     * - Header (Bearer xxx): request ปกติ
+     * - Query (?token=xxx): สำหรับ SSE endpoint เพราะ EventSource API
+     * ของ browser ส่ง custom header ไม่ได้
+     */
+    private String extractToken(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        if (header != null && header.startsWith("Bearer ")) {
+            return header.substring(7);
+        }
+        // fallback: query string เฉพาะ SSE endpoint
+        String uri = request.getRequestURI();
+        if (uri != null && uri.endsWith("/stream")) {
+            return request.getParameter("token");
+        }
+        return null;
     }
 
     /**
@@ -115,5 +132,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         return null;
     }
 
-    private record AuthInfo(String email, String authority) {}
+    private record AuthInfo(String email, String authority) {
+    }
 }
