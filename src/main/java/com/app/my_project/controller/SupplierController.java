@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
 import java.util.List;
 
 @RestController
@@ -47,5 +48,19 @@ public class SupplierController {
             @PathVariable Long id,
             @RequestBody SupplierRequest request) {
         return ResponseEntity.ok(supplierService.update(id, request));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> delete(@PathVariable Long id) {
+        try {
+            supplierService.delete(id);
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "ลบ Supplier สำเร็จ"));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()));
+        }
     }
 }
