@@ -83,21 +83,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    /**
-     * อ่าน JWT จาก Authorization header หรือ query string
-     * - Header (Bearer xxx): request ปกติ
-     * - Query (?token=xxx): สำหรับ SSE endpoint เพราะ EventSource API
-     * ของ browser ส่ง custom header ไม่ได้
-     */
     private String extractToken(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
             return header.substring(7);
-        }
-        // fallback: query string เฉพาะ SSE endpoint
-        String uri = request.getRequestURI();
-        if (uri != null && uri.endsWith("/stream")) {
-            return request.getParameter("token");
         }
         return null;
     }

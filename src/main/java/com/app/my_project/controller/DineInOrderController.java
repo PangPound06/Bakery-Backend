@@ -13,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -49,31 +48,6 @@ public class DineInOrderController {
     // ✅ FIX #3: สถานะที่อนุญาตให้ admin เปลี่ยนได้
     private static final Set<String> VALID_STATUSES = Set.of(
             "pending", "preparing", "ready", "completed");
-
-    // ✅ FIX #5: SSE — เก็บ connection ของทุก client
-    private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
-
-    // ✅ SSE endpoint — client เชื่อมต่อเพื่อรับ event แบบ real-time
-    @GetMapping("/stream")
-    public SseEmitter stream() {
-        SseEmitter emitter = new SseEmitter(0L);
-        emitters.add(emitter);
-        emitter.onCompletion(() -> emitters.remove(emitter));
-        emitter.onTimeout(() -> emitters.remove(emitter));
-        emitter.onError(e -> emitters.remove(emitter));
-        return emitter;
-    }
-
-    // ✅ ส่ง event แจ้งทุก client ที่เชื่อมต่ออยู่
-    private void notifyClients() {
-        for (SseEmitter emitter : emitters) {
-            try {
-                emitter.send(SseEmitter.event().name("order-update").data("updated"));
-            } catch (Exception e) {
-                emitters.remove(emitter);
-            }
-        }
-    }
 
     // ✅ Helper: filter ออเดอร์ + โต๊ะตรง + ไม่ถูกยกเลิก + ยังไม่จ่าย
     private List<DineInOrderEntity> getActiveOrders(String email, String tableNo) {
@@ -144,8 +118,6 @@ public class DineInOrderController {
                     }
                 }
             }
-
-            notifyClients();
 
             response.put("success", true);
             response.put("orderId", saved.getId());
@@ -247,8 +219,6 @@ public class DineInOrderController {
                     orderItemRepository.save(orderItem);
                 }
             }
-
-            notifyClients();
 
             response.put("success", true);
             response.put("message", "ส่งสลิปเรียบร้อยแล้ว");
@@ -363,8 +333,6 @@ public class DineInOrderController {
             order.setOrderStatus(newStatus);
             dineInOrderRepository.save(order);
 
-            notifyClients();
-
             response.put("success", true);
             return ResponseEntity.ok(response);
         }).orElseGet(() -> {
@@ -408,8 +376,6 @@ public class DineInOrderController {
                 }
                 order.setOrderStatus("cancelled");
                 dineInOrderRepository.save(order);
-
-                notifyClients();
 
                 response.put("success", true);
                 return ResponseEntity.ok(response);
