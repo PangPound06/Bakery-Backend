@@ -3,18 +3,6 @@ package com.app.my_project.entity;
 import jakarta.persistence.*;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-/**
- * ProductEntity — final fix
- *
- * ปัญหา: Spring Boot 3.x ใช้ CamelCaseToUnderscoresNamingStrategy
- * → แม้ใส่ @Column(name="\"stockQuantity\"") Hibernate ยังแปลงเป็น
- * "stock_quantity"
- *
- * วิธีแก้: ใช้ backtick `` `` (grave accent) ครอบชื่อ column
- * → JPA spec บอก backtick = "delimited identifier" → Hibernate ห้ามแปลง
- * → ตรง keyword `Quoted identifier` ของ Hibernate
- * → DB จะได้ "stockQuantity" ตามจริง
- */
 @Entity
 @Table(name = "tb_products")
 public class ProductEntity {
@@ -27,29 +15,22 @@ public class ProductEntity {
     private String name;
 
     private Double price;
-
     private String category;
-
-    @Column(name = "category_id")
-    private Long categoryId;
-
     private String image;
     private String type;
 
     @Column(columnDefinition = "TEXT")
     private String description;
 
-    // ✅ backtick = delimited identifier → Hibernate ไม่แปลง naming strategy
-    @Column(name = "`stockQuantity`")
+    // ✅ ใช้ @Column(name=...) แบบธรรมดา ไม่ใส่ quotes ซ้อน
+    // Hibernate จะ map ไปหา column "stockQuantity" ใน DB ได้ถูกต้อง
+    @Column(name = "stockQuantity")
     @JsonProperty("stockQuantity")
     private Long stockQuantity;
 
-    @Column(name = "`isAvailable`")
+    @Column(name = "isAvailable")
     @JsonProperty("isAvailable")
     private Boolean isAvailable;
-
-    @Column(columnDefinition = "TEXT")
-    private String options;
 
     public ProductEntity() {
     }
@@ -84,14 +65,6 @@ public class ProductEntity {
 
     public void setCategory(String category) {
         this.category = category;
-    }
-
-    public Long getCategoryId() {
-        return categoryId;
-    }
-
-    public void setCategoryId(Long categoryId) {
-        this.categoryId = categoryId;
     }
 
     public String getImage() {
@@ -133,13 +106,5 @@ public class ProductEntity {
 
     public void setIsAvailable(Boolean isAvailable) {
         this.isAvailable = isAvailable;
-    }
-
-    public String getOptions() {
-        return options;
-    }
-
-    public void setOptions(String options) {
-        this.options = options;
     }
 }
