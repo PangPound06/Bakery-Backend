@@ -4,13 +4,16 @@ import jakarta.persistence.*;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * ProductEntity — refactored to include all DB columns
+ * ProductEntity — final fix
  *
- * เพิ่ม fields ที่เดิมไม่มี (อ่านจาก raw SQL ใน controller):
- * - categoryId — FK ไป tb_categories
- * - options — JSON string สำหรับตัวเลือก (เช่น "1 ปอนด์ / 2 ปอนด์")
+ * ปัญหา: Spring Boot 3.x ใช้ CamelCaseToUnderscoresNamingStrategy
+ * → แม้ใส่ @Column(name="\"stockQuantity\"") Hibernate ยังแปลงเป็น
+ * "stock_quantity"
  *
- * Note: field `category` (slug string) ยังคงไว้เพื่อ backward compatibility
+ * วิธีแก้: ใช้ backtick `` `` (grave accent) ครอบชื่อ column
+ * → JPA spec บอก backtick = "delimited identifier" → Hibernate ห้ามแปลง
+ * → ตรง keyword `Quoted identifier` ของ Hibernate
+ * → DB จะได้ "stockQuantity" ตามจริง
  */
 @Entity
 @Table(name = "tb_products")
@@ -25,7 +28,7 @@ public class ProductEntity {
 
     private Double price;
 
-    private String category; // slug (e.g. "cakes")
+    private String category;
 
     @Column(name = "category_id")
     private Long categoryId;
@@ -36,11 +39,12 @@ public class ProductEntity {
     @Column(columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "\"stockQuantity\"")
+    // ✅ backtick = delimited identifier → Hibernate ไม่แปลง naming strategy
+    @Column(name = "`stockQuantity`")
     @JsonProperty("stockQuantity")
     private Long stockQuantity;
 
-    @Column(name = "\"isAvailable\"")
+    @Column(name = "`isAvailable`")
     @JsonProperty("isAvailable")
     private Boolean isAvailable;
 
