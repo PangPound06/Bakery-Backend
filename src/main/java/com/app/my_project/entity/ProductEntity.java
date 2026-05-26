@@ -3,6 +3,15 @@ package com.app.my_project.entity;
 import jakarta.persistence.*;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+/**
+ * ProductEntity — refactored to include all DB columns
+ *
+ * เพิ่ม fields ที่เดิมไม่มี (อ่านจาก raw SQL ใน controller):
+ * - categoryId — FK ไป tb_categories
+ * - options — JSON string สำหรับตัวเลือก (เช่น "1 ปอนด์ / 2 ปอนด์")
+ *
+ * Note: field `category` (slug string) ยังคงไว้เพื่อ backward compatibility
+ */
 @Entity
 @Table(name = "tb_products")
 public class ProductEntity {
@@ -15,15 +24,18 @@ public class ProductEntity {
     private String name;
 
     private Double price;
-    private String category;
+
+    private String category; // slug (e.g. "cakes")
+
+    @Column(name = "category_id")
+    private Long categoryId;
+
     private String image;
     private String type;
 
     @Column(columnDefinition = "TEXT")
     private String description;
 
-    // ✅ ใช้ @Column(name=...) แบบธรรมดา ไม่ใส่ quotes ซ้อน
-    // Hibernate จะ map ไปหา column "stockQuantity" ใน DB ได้ถูกต้อง
     @Column(name = "stockQuantity")
     @JsonProperty("stockQuantity")
     private Long stockQuantity;
@@ -31,6 +43,9 @@ public class ProductEntity {
     @Column(name = "isAvailable")
     @JsonProperty("isAvailable")
     private Boolean isAvailable;
+
+    @Column(columnDefinition = "TEXT")
+    private String options;
 
     public ProductEntity() {
     }
@@ -65,6 +80,14 @@ public class ProductEntity {
 
     public void setCategory(String category) {
         this.category = category;
+    }
+
+    public Long getCategoryId() {
+        return categoryId;
+    }
+
+    public void setCategoryId(Long categoryId) {
+        this.categoryId = categoryId;
     }
 
     public String getImage() {
@@ -106,5 +129,13 @@ public class ProductEntity {
 
     public void setIsAvailable(Boolean isAvailable) {
         this.isAvailable = isAvailable;
+    }
+
+    public String getOptions() {
+        return options;
+    }
+
+    public void setOptions(String options) {
+        this.options = options;
     }
 }
