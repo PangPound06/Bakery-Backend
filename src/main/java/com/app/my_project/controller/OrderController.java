@@ -18,28 +18,28 @@ import java.util.*;
  * OrderController — refactored from 1042 lines → ~280 lines
  *
  * Pattern:
- *  - Thin controller layer: ทุก endpoint แค่
- *    1. ตรวจ auth (admin/owner)
- *    2. parse request → DTO ของ service
- *    3. เรียก service method
- *    4. map result enum → HTTP status
- *  - ทุก business logic อยู่ใน service layer
- *  - ไม่มี raw JDBC, ไม่มี @Transactional ที่ controller
+ * - Thin controller layer: ทุก endpoint แค่
+ * 1. ตรวจ auth (admin/owner)
+ * 2. parse request → DTO ของ service
+ * 3. เรียก service method
+ * 4. map result enum → HTTP status
+ * - ทุก business logic อยู่ใน service layer
+ * - ไม่มี raw JDBC, ไม่มี @Transactional ที่ controller
  *
  * 13 endpoints (ครบเหมือนของเดิม):
- *  - POST /
- *  - GET /user/{email}
- *  - GET /{id}
- *  - PUT /{id}/status
- *  - GET /all
- *  - PUT /{id}/cancel
- *  - GET /search/{orderId}
- *  - PUT /backfill-ordcode
- *  - GET /stats/top-products
- *  - GET /my-dine-in
- *  - POST /{orderId}/items
- *  - PATCH /{orderId}/items/{itemId}
- *  - DELETE /{orderId}/items/{itemId}
+ * - POST /
+ * - GET /user/{email}
+ * - GET /{id}
+ * - PUT /{id}/status
+ * - GET /all
+ * - PUT /{id}/cancel
+ * - GET /search/{orderId}
+ * - PUT /backfill-ordcode
+ * - GET /stats/top-products
+ * - GET /my-dine-in
+ * - POST /{orderId}/items
+ * - PATCH /{orderId}/items/{itemId}
+ * - DELETE /{orderId}/items/{itemId}
  */
 @RestController
 @RequestMapping("/api/orders")
@@ -55,12 +55,12 @@ public class OrderController {
     private final AdminRepository adminRepository;
 
     public OrderController(OrderService orderService,
-                           OrderItemService orderItemService,
-                           OrderStatsService orderStatsService,
-                           OrderItemRepository orderItemRepository,
-                           StockService stockService,
-                           JwtService jwtService,
-                           AdminRepository adminRepository) {
+            OrderItemService orderItemService,
+            OrderStatsService orderStatsService,
+            OrderItemRepository orderItemRepository,
+            StockService stockService,
+            JwtService jwtService,
+            AdminRepository adminRepository) {
         this.orderService = orderService;
         this.orderItemService = orderItemService;
         this.orderStatsService = orderStatsService;
@@ -76,7 +76,7 @@ public class OrderController {
 
     @PostMapping
     public ResponseEntity<?> createOrder(@RequestBody Map<String, Object> body,
-                                          @RequestHeader(value = "Authorization", required = false) String auth) {
+            @RequestHeader(value = "Authorization", required = false) String auth) {
         String email = (String) body.get("email");
         if (email == null || email.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Email required"));
@@ -88,8 +88,7 @@ public class OrderController {
             return ResponseEntity.ok(Map.of(
                     "success", true,
                     "orderId", saved.getId(),
-                    "ordCode", saved.getOrdCode()
-            ));
+                    "ordCode", saved.getOrdCode()));
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
@@ -109,8 +108,7 @@ public class OrderController {
                             asDouble(m.get("price")),
                             asInt(m.get("quantity")),
                             asString(m.get("selectedOption")),
-                            asString(m.get("image"))
-                    ));
+                            asString(m.get("image"))));
                 }
             }
         }
@@ -131,8 +129,7 @@ public class OrderController {
                 asString(body.get("receiverPhone")),
                 asString(body.get("receiverAddress")),
                 asString(body.get("note")),
-                items
-        );
+                items);
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -151,13 +148,24 @@ public class OrderController {
     @GetMapping("/{id}")
     public ResponseEntity<?> getById(@PathVariable Long id) {
         Optional<OrderEntity> opt = orderService.getById(id);
-        if (opt.isEmpty()) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(orderToMap(opt.get(), loadItems(id)));
+        if (opt.isEmpty())
+            return ResponseEntity.notFound().build();
+
+        OrderEntity order = opt.get();
+        List<Map<String, Object>> items = loadItems(id);
+
+        // ✅ Frontend expects: { success, order, items }
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("order", orderToMap(order, items));
+        response.put("items", items);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/all")
     public ResponseEntity<?> getAll(@RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!isAdmin(auth)) return forbidden();
+        if (!isAdmin(auth))
+            return forbidden();
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (OrderEntity o : orderService.getAll()) {
@@ -169,14 +177,25 @@ public class OrderController {
     @GetMapping("/search/{orderCode}")
     public ResponseEntity<?> searchByCode(@PathVariable String orderCode) {
         Optional<OrderEntity> opt = orderService.searchByCode(orderCode);
-        if (opt.isEmpty()) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(orderToMap(opt.get(), loadItems(opt.get().getId())));
+        if (opt.isEmpty())
+            return ResponseEntity.notFound().build();
+
+        OrderEntity order = opt.get();
+        List<Map<String, Object>> items = loadItems(order.getId());
+
+        // Frontend expects: { success, order, items }
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("order", orderToMap(order, items));
+        response.put("items", items);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/my-dine-in")
     public ResponseEntity<?> getMyDineIn(@RequestHeader(value = "Authorization", required = false) String auth) {
         Long userId = jwtService.getUserIdFromHeader(auth);
-        if (userId == null) return unauthorized();
+        if (userId == null)
+            return unauthorized();
 
         // ดึง orders ของ user ที่เป็น dine-in
         List<Map<String, Object>> result = new ArrayList<>();
@@ -197,20 +216,22 @@ public class OrderController {
 
     @PutMapping("/{id}/status")
     public ResponseEntity<?> updateStatus(@PathVariable Long id,
-                                           @RequestBody Map<String, Object> body,
-                                           @RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!isAdmin(auth)) return forbidden();
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        if (!isAdmin(auth))
+            return forbidden();
 
         String orderStatus = asString(body.get("orderStatus"));
         String paymentStatus = asString(body.get("paymentStatus"));
         boolean ok = orderService.updateStatus(id, orderStatus, paymentStatus);
-        if (!ok) return ResponseEntity.notFound().build();
+        if (!ok)
+            return ResponseEntity.notFound().build();
         return ResponseEntity.ok(Map.of("success", true));
     }
 
     @PutMapping("/{id}/cancel")
     public ResponseEntity<?> cancelOrder(@PathVariable Long id,
-                                          @RequestHeader(value = "Authorization", required = false) String auth) {
+            @RequestHeader(value = "Authorization", required = false) String auth) {
         OrderService.CancelResult result = orderService.cancelOrder(id);
         return switch (result) {
             case SUCCESS -> ResponseEntity.ok(Map.of("success", true));
@@ -222,7 +243,8 @@ public class OrderController {
 
     @PutMapping("/backfill-ordcode")
     public ResponseEntity<?> backfillOrdCodes(@RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!isAdmin(auth)) return forbidden();
+        if (!isAdmin(auth))
+            return forbidden();
         int count = orderService.backfillOrdCodes();
         return ResponseEntity.ok(Map.of("success", true, "updatedCount", count));
     }
@@ -233,9 +255,10 @@ public class OrderController {
 
     @PostMapping("/{orderId}/items")
     public ResponseEntity<?> addItem(@PathVariable Long orderId,
-                                      @RequestBody Map<String, Object> body,
-                                      @RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!isAdmin(auth)) return forbidden();
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        if (!isAdmin(auth))
+            return forbidden();
 
         OrderItemService.AddItemRequest req = new OrderItemService.AddItemRequest(
                 asLong(body.get("productId")),
@@ -243,8 +266,7 @@ public class OrderController {
                 asDouble(body.get("price")),
                 asInt(body.get("displayQty")),
                 asString(body.get("selectedOption")),
-                asString(body.get("image"))
-        );
+                asString(body.get("image")));
 
         OrderItemService.AddItemResult result = orderItemService.addItem(orderId, req);
         return mapAddResult(result);
@@ -252,10 +274,11 @@ public class OrderController {
 
     @PatchMapping("/{orderId}/items/{itemId}")
     public ResponseEntity<?> updateItemQty(@PathVariable Long orderId,
-                                            @PathVariable Long itemId,
-                                            @RequestBody Map<String, Object> body,
-                                            @RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!isAdmin(auth)) return forbidden();
+            @PathVariable Long itemId,
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        if (!isAdmin(auth))
+            return forbidden();
 
         int qty = asInt(body.get("displayQty"));
         OrderItemService.UpdateQtyResult result = orderItemService.updateQuantity(orderId, itemId, qty);
@@ -264,9 +287,10 @@ public class OrderController {
 
     @DeleteMapping("/{orderId}/items/{itemId}")
     public ResponseEntity<?> removeItem(@PathVariable Long orderId,
-                                         @PathVariable Long itemId,
-                                         @RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!isAdmin(auth)) return forbidden();
+            @PathVariable Long itemId,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        if (!isAdmin(auth))
+            return forbidden();
 
         OrderItemService.RemoveItemResult result = orderItemService.removeItem(orderId, itemId);
         return mapRemoveResult(result);
@@ -278,8 +302,9 @@ public class OrderController {
 
     @GetMapping("/stats/top-products")
     public ResponseEntity<?> topProducts(@RequestParam(defaultValue = "all") String days,
-                                          @RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!isAdmin(auth)) return forbidden();
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        if (!isAdmin(auth))
+            return forbidden();
 
         OrderStatsService.TopProductsResult result = orderStatsService.getTopProducts(days);
 
@@ -291,8 +316,7 @@ public class OrderController {
                     "category", p.category(),
                     "totalQty", p.totalQty(),
                     "totalRevenue", p.totalRevenue(),
-                    "orderCount", p.orderCount()
-            ));
+                    "orderCount", p.orderCount()));
         }
 
         return ResponseEntity.ok(Map.of(
@@ -300,8 +324,7 @@ public class OrderController {
                 "totalAllRevenue", result.totalAllRevenue(),
                 "totalAllQty", result.totalAllQty(),
                 "totalAllOrders", result.totalAllOrders(),
-                "totalProductCount", result.totalProductCount()
-        ));
+                "totalProductCount", result.totalProductCount()));
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -310,7 +333,8 @@ public class OrderController {
 
     /** ตรวจ admin จาก JWT token */
     boolean isAdmin(String authHeader) {
-        if (!jwtService.isAdmin(authHeader)) return false;
+        if (!jwtService.isAdmin(authHeader))
+            return false;
         Long userId = jwtService.getUserIdFromHeader(authHeader);
         return userId != null && adminRepository.existsById(userId);
     }
@@ -376,8 +400,7 @@ public class OrderController {
                     "success", true,
                     "itemId", result.savedItem().getId(),
                     "subtotal", result.totals().subtotal(),
-                    "total", result.totals().total()
-            ));
+                    "total", result.totals().total()));
             case ORDER_NOT_FOUND -> ResponseEntity.notFound().build();
             case ORDER_LOCKED -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Cannot modify delivered/cancelled order"));
@@ -390,8 +413,7 @@ public class OrderController {
             case SUCCESS -> ResponseEntity.ok(Map.of(
                     "success", true,
                     "subtotal", result.totals().subtotal(),
-                    "total", result.totals().total()
-            ));
+                    "total", result.totals().total()));
             case ORDER_NOT_FOUND, ITEM_NOT_FOUND -> ResponseEntity.notFound().build();
             case ORDER_LOCKED -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Cannot modify delivered/cancelled order"));
@@ -406,12 +428,10 @@ public class OrderController {
             case SUCCESS -> ResponseEntity.ok(Map.of(
                     "success", true,
                     "subtotal", result.totals().subtotal(),
-                    "total", result.totals().total()
-            ));
+                    "total", result.totals().total()));
             case ORDER_CANCELLED -> ResponseEntity.ok(Map.of(
                     "success", true,
-                    "message", "Last item removed - order cancelled"
-            ));
+                    "message", "Last item removed - order cancelled"));
             case ORDER_NOT_FOUND, ITEM_NOT_FOUND -> ResponseEntity.notFound().build();
             case ORDER_LOCKED -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Cannot modify delivered/cancelled order"));
@@ -428,23 +448,38 @@ public class OrderController {
     }
 
     private static Long asLong(Object v) {
-        if (v == null) return null;
-        if (v instanceof Number n) return n.longValue();
-        try { return Long.parseLong(v.toString()); }
-        catch (NumberFormatException e) { return null; }
+        if (v == null)
+            return null;
+        if (v instanceof Number n)
+            return n.longValue();
+        try {
+            return Long.parseLong(v.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static Integer asInt(Object v) {
-        if (v == null) return 0;
-        if (v instanceof Number n) return n.intValue();
-        try { return Integer.parseInt(v.toString()); }
-        catch (NumberFormatException e) { return 0; }
+        if (v == null)
+            return 0;
+        if (v instanceof Number n)
+            return n.intValue();
+        try {
+            return Integer.parseInt(v.toString());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static Double asDouble(Object v) {
-        if (v == null) return null;
-        if (v instanceof Number n) return n.doubleValue();
-        try { return Double.parseDouble(v.toString()); }
-        catch (NumberFormatException e) { return null; }
+        if (v == null)
+            return null;
+        if (v instanceof Number n)
+            return n.doubleValue();
+        try {
+            return Double.parseDouble(v.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 }

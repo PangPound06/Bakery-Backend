@@ -22,21 +22,28 @@ import static org.mockito.Mockito.*;
 
 /**
  * Test OrderController — focus on:
- *  - Auth checks (admin vs user)
- *  - Result enum → HTTP status mapping
- *  - Request parsing
- *  - Response shape
+ * - Auth checks (admin vs user)
+ * - Result enum → HTTP status mapping
+ * - Request parsing
+ * - Response shape
  */
 @ExtendWith(MockitoExtension.class)
 class OrderControllerTest {
 
-    @Mock private OrderService orderService;
-    @Mock private OrderItemService orderItemService;
-    @Mock private OrderStatsService orderStatsService;
-    @Mock private OrderItemRepository orderItemRepository;
-    @Mock private StockService stockService;
-    @Mock private JwtService jwtService;
-    @Mock private AdminRepository adminRepository;
+    @Mock
+    private OrderService orderService;
+    @Mock
+    private OrderItemService orderItemService;
+    @Mock
+    private OrderStatsService orderStatsService;
+    @Mock
+    private OrderItemRepository orderItemRepository;
+    @Mock
+    private StockService stockService;
+    @Mock
+    private JwtService jwtService;
+    @Mock
+    private AdminRepository adminRepository;
 
     @InjectMocks
     private OrderController controller;
@@ -138,6 +145,12 @@ class OrderControllerTest {
             ResponseEntity<?> response = controller.getById(1L);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) response.getBody();
+            // ✅ verify wrapped format: { success, order, items }
+            assertThat(body.get("success")).isEqualTo(true);
+            assertThat(body.get("order")).isNotNull();
+            assertThat(body.get("items")).isNotNull();
         }
 
         @Test
@@ -174,7 +187,7 @@ class OrderControllerTest {
         }
 
         @Test
-        @DisplayName("GET /search/{code} เจอ → 200")
+        @DisplayName("GET /search/{code} เจอ → 200 with wrapped format")
         void search_found() {
             when(orderService.searchByCode("ORD1047291")).thenReturn(Optional.of(makeOrder(1L)));
             when(orderItemRepository.findByOrderId(1L)).thenReturn(List.of());
@@ -182,6 +195,10 @@ class OrderControllerTest {
             ResponseEntity<?> response = controller.searchByCode("ORD1047291");
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) response.getBody();
+            assertThat(body.get("success")).isEqualTo(true);
+            assertThat(body.get("order")).isNotNull();
         }
 
         @Test
@@ -319,8 +336,7 @@ class OrderControllerTest {
                     .thenReturn(new OrderItemService.AddItemResult(
                             OrderItemService.Result.SUCCESS,
                             savedItem,
-                            new OrderItemService.Totals(100.0, 130.0)
-                    ));
+                            new OrderItemService.Totals(100.0, 130.0)));
 
             Map<String, Object> body = new HashMap<>();
             body.put("productId", 10L);
@@ -386,8 +402,7 @@ class OrderControllerTest {
             when(orderItemService.updateQuantity(eq(1L), eq(100L), eq(2)))
                     .thenReturn(new OrderItemService.UpdateQtyResult(
                             OrderItemService.Result.SUCCESS,
-                            new OrderItemService.Totals(200.0, 230.0)
-                    ));
+                            new OrderItemService.Totals(200.0, 230.0)));
 
             ResponseEntity<?> response = controller.updateItemQty(1L, 100L,
                     Map.of("displayQty", 2), ADMIN_AUTH);
@@ -447,8 +462,7 @@ class OrderControllerTest {
             when(orderItemService.removeItem(1L, 100L))
                     .thenReturn(new OrderItemService.RemoveItemResult(
                             OrderItemService.Result.SUCCESS,
-                            new OrderItemService.Totals(50.0, 80.0)
-                    ));
+                            new OrderItemService.Totals(50.0, 80.0)));
 
             ResponseEntity<?> response = controller.removeItem(1L, 100L, ADMIN_AUTH);
 
@@ -505,12 +519,10 @@ class OrderControllerTest {
         void admin_returnsResponse() {
             mockAdmin();
             OrderStatsService.TopProduct top = new OrderStatsService.TopProduct(
-                    "Cake", "1 ปอนด์", "cake", 5L, 500L, 3L
-            );
+                    "Cake", "1 ปอนด์", "cake", 5L, 500L, 3L);
             when(orderStatsService.getTopProducts("7"))
                     .thenReturn(new OrderStatsService.TopProductsResult(
-                            List.of(top), 1000L, 10L, 5L, 1
-                    ));
+                            List.of(top), 1000L, 10L, 5L, 1));
 
             ResponseEntity<?> response = controller.topProducts("7", ADMIN_AUTH);
 
