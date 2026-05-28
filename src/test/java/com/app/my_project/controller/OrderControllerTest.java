@@ -320,11 +320,15 @@ class OrderControllerTest {
     class AddItemTests {
 
         @Test
-        @DisplayName("Admin + SUCCESS → 200 + itemId + totals")
+        @DisplayName("Admin + SUCCESS → 200 + newItem + newSubtotal + newTotal")
         void admin_success() {
             mockAdmin();
             OrderItemEntity savedItem = new OrderItemEntity();
             savedItem.setId(100L);
+            savedItem.setProductId(10L);
+            savedItem.setProductName("Cake");
+            savedItem.setPrice(100.0);
+            savedItem.setQuantity(1);
             when(orderItemService.addItem(eq(1L), any()))
                     .thenReturn(new OrderItemService.AddItemResult(
                             OrderItemService.Result.SUCCESS,
@@ -343,8 +347,15 @@ class OrderControllerTest {
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             @SuppressWarnings("unchecked")
             Map<String, Object> resBody = (Map<String, Object>) response.getBody();
-            assertThat(resBody.get("itemId")).isEqualTo(100L);
-            assertThat(resBody.get("total")).isEqualTo(130.0);
+            // ✅ verify frontend-compatible shape
+            assertThat(resBody.get("success")).isEqualTo(true);
+            assertThat(resBody.get("newItem")).isNotNull();
+            assertThat(resBody.get("newSubtotal")).isEqualTo(100.0);
+            assertThat(resBody.get("newTotal")).isEqualTo(130.0);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> newItem = (Map<String, Object>) resBody.get("newItem");
+            assertThat(newItem.get("id")).isEqualTo(100L);
+            assertThat(newItem.get("productName")).isEqualTo("Cake");
         }
 
         @Test
@@ -390,7 +401,7 @@ class OrderControllerTest {
     class UpdateItemTests {
 
         @Test
-        @DisplayName("SUCCESS → 200 + totals")
+        @DisplayName("SUCCESS → 200 + newSubtotal + newTotal")
         void success_returns200() {
             mockAdmin();
             when(orderItemService.updateQuantity(eq(1L), eq(100L), eq(2)))
@@ -403,6 +414,10 @@ class OrderControllerTest {
                     Map.of("displayQty", 2), ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) response.getBody();
+            assertThat(body.get("newSubtotal")).isEqualTo(200.0);
+            assertThat(body.get("newTotal")).isEqualTo(230.0);
         }
 
         @Test
@@ -451,7 +466,7 @@ class OrderControllerTest {
     class RemoveItemTests {
 
         @Test
-        @DisplayName("SUCCESS → 200")
+        @DisplayName("SUCCESS → 200 + newSubtotal + newTotal")
         void success_returns200() {
             mockAdmin();
             when(orderItemService.removeItem(1L, 100L))
@@ -463,10 +478,14 @@ class OrderControllerTest {
             ResponseEntity<?> response = controller.removeItem(1L, 100L, ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) response.getBody();
+            assertThat(body.get("newSubtotal")).isEqualTo(50.0);
+            assertThat(body.get("newTotal")).isEqualTo(80.0);
         }
 
         @Test
-        @DisplayName("✅ ORDER_CANCELLED (ลบ item สุดท้าย) → 200 with cancel message")
+        @DisplayName("✅ ORDER_CANCELLED (ลบ item สุดท้าย) → 200 with cancelled flag + message")
         void orderCancelled_200WithMessage() {
             mockAdmin();
             when(orderItemService.removeItem(1L, 100L))
@@ -478,6 +497,7 @@ class OrderControllerTest {
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             @SuppressWarnings("unchecked")
             Map<String, Object> body = (Map<String, Object>) response.getBody();
+            assertThat(body.get("cancelled")).isEqualTo(true);
             assertThat(body.get("message").toString()).contains("cancelled");
         }
 

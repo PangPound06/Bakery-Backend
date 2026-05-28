@@ -396,11 +396,26 @@ public class OrderController {
 
     private ResponseEntity<?> mapAddResult(OrderItemService.AddItemResult result) {
         return switch (result.result()) {
-            case SUCCESS -> ResponseEntity.ok(Map.of(
-                    "success", true,
-                    "itemId", result.savedItem().getId(),
-                    "subtotal", result.totals().subtotal(),
-                    "total", result.totals().total()));
+            case SUCCESS -> {
+                // ✅ Frontend expects: { success, newItem: {full object}, newSubtotal, newTotal
+                // }
+                OrderItemEntity item = result.savedItem();
+                Map<String, Object> newItem = new HashMap<>();
+                newItem.put("id", item.getId());
+                newItem.put("productId", item.getProductId());
+                newItem.put("productName", item.getProductName());
+                newItem.put("price", item.getPrice());
+                newItem.put("quantity", item.getQuantity());
+                newItem.put("selectedOption", item.getSelectedOption());
+                newItem.put("image", item.getImage());
+
+                Map<String, Object> response = new HashMap<>();
+                response.put("success", true);
+                response.put("newItem", newItem);
+                response.put("newSubtotal", result.totals().subtotal());
+                response.put("newTotal", result.totals().total());
+                yield ResponseEntity.ok(response);
+            }
             case ORDER_NOT_FOUND -> ResponseEntity.notFound().build();
             case ORDER_LOCKED -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Cannot modify delivered/cancelled order"));
@@ -412,8 +427,8 @@ public class OrderController {
         return switch (result.result()) {
             case SUCCESS -> ResponseEntity.ok(Map.of(
                     "success", true,
-                    "subtotal", result.totals().subtotal(),
-                    "total", result.totals().total()));
+                    "newSubtotal", result.totals().subtotal(),
+                    "newTotal", result.totals().total()));
             case ORDER_NOT_FOUND, ITEM_NOT_FOUND -> ResponseEntity.notFound().build();
             case ORDER_LOCKED -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Cannot modify delivered/cancelled order"));
@@ -427,10 +442,11 @@ public class OrderController {
         return switch (result.result()) {
             case SUCCESS -> ResponseEntity.ok(Map.of(
                     "success", true,
-                    "subtotal", result.totals().subtotal(),
-                    "total", result.totals().total()));
+                    "newSubtotal", result.totals().subtotal(),
+                    "newTotal", result.totals().total()));
             case ORDER_CANCELLED -> ResponseEntity.ok(Map.of(
                     "success", true,
+                    "cancelled", true,
                     "message", "Last item removed - order cancelled"));
             case ORDER_NOT_FOUND, ITEM_NOT_FOUND -> ResponseEntity.notFound().build();
             case ORDER_LOCKED -> ResponseEntity.badRequest()
