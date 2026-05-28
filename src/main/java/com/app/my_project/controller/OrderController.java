@@ -264,7 +264,7 @@ public class OrderController {
                 asLong(body.get("productId")),
                 asString(body.get("productName")),
                 asDouble(body.get("price")),
-                asInt(body.get("displayQty")),
+                asInt(body.get("quantity")), // ✅ frontend ส่ง "quantity"
                 asString(body.get("selectedOption")),
                 asString(body.get("image")));
 
@@ -280,7 +280,7 @@ public class OrderController {
         if (!isAdmin(auth))
             return forbidden();
 
-        int qty = asInt(body.get("displayQty"));
+        int qty = asInt(body.get("quantity")); // ✅ frontend ส่ง "quantity"
         OrderItemService.UpdateQtyResult result = orderItemService.updateQuantity(orderId, itemId, qty);
         return mapUpdateResult(result);
     }

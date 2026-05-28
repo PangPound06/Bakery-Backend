@@ -5,6 +5,7 @@ import com.app.my_project.entity.OrderItemEntity;
 import com.app.my_project.repository.AdminRepository;
 import com.app.my_project.repository.OrderItemRepository;
 import com.app.my_project.service.*;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -22,21 +23,28 @@ import static org.mockito.Mockito.*;
 
 /**
  * Test OrderController — focus on:
- *  - Auth checks (admin vs user)
- *  - Result enum → HTTP status mapping
- *  - Request parsing
- *  - Response shape
+ * - Auth checks (admin vs user)
+ * - Result enum → HTTP status mapping
+ * - Request parsing
+ * - Response shape
  */
 @ExtendWith(MockitoExtension.class)
 class OrderControllerTest {
 
-    @Mock private OrderService orderService;
-    @Mock private OrderItemService orderItemService;
-    @Mock private OrderStatsService orderStatsService;
-    @Mock private OrderItemRepository orderItemRepository;
-    @Mock private StockService stockService;
-    @Mock private JwtService jwtService;
-    @Mock private AdminRepository adminRepository;
+    @Mock
+    private OrderService orderService;
+    @Mock
+    private OrderItemService orderItemService;
+    @Mock
+    private OrderStatsService orderStatsService;
+    @Mock
+    private OrderItemRepository orderItemRepository;
+    @Mock
+    private StockService stockService;
+    @Mock
+    private JwtService jwtService;
+    @Mock
+    private AdminRepository adminRepository;
 
     @InjectMocks
     private OrderController controller;
@@ -333,14 +341,13 @@ class OrderControllerTest {
                     .thenReturn(new OrderItemService.AddItemResult(
                             OrderItemService.Result.SUCCESS,
                             savedItem,
-                            new OrderItemService.Totals(100.0, 130.0)
-                    ));
+                            new OrderItemService.Totals(100.0, 130.0)));
 
             Map<String, Object> body = new HashMap<>();
             body.put("productId", 10L);
             body.put("productName", "Cake");
             body.put("price", 100.0);
-            body.put("displayQty", 1);
+            body.put("quantity", 1);
 
             ResponseEntity<?> response = controller.addItem(1L, body, ADMIN_AUTH);
 
@@ -407,11 +414,10 @@ class OrderControllerTest {
             when(orderItemService.updateQuantity(eq(1L), eq(100L), eq(2)))
                     .thenReturn(new OrderItemService.UpdateQtyResult(
                             OrderItemService.Result.SUCCESS,
-                            new OrderItemService.Totals(200.0, 230.0)
-                    ));
+                            new OrderItemService.Totals(200.0, 230.0)));
 
             ResponseEntity<?> response = controller.updateItemQty(1L, 100L,
-                    Map.of("displayQty", 2), ADMIN_AUTH);
+                    Map.of("quantity", 2), ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             @SuppressWarnings("unchecked")
@@ -429,7 +435,7 @@ class OrderControllerTest {
                             OrderItemService.Result.ITEM_NOT_IN_ORDER, null));
 
             ResponseEntity<?> response = controller.updateItemQty(1L, 100L,
-                    Map.of("displayQty", 2), ADMIN_AUTH);
+                    Map.of("quantity", 2), ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(400);
         }
@@ -443,7 +449,7 @@ class OrderControllerTest {
                             OrderItemService.Result.ITEM_NOT_FOUND, null));
 
             ResponseEntity<?> response = controller.updateItemQty(1L, 999L,
-                    Map.of("displayQty", 1), ADMIN_AUTH);
+                    Map.of("quantity", 1), ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(404);
         }
@@ -454,7 +460,7 @@ class OrderControllerTest {
             mockNotAdmin();
 
             ResponseEntity<?> response = controller.updateItemQty(1L, 100L,
-                    Map.of("displayQty", 1), USER_AUTH);
+                    Map.of("quantity", 1), USER_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(403);
         }
@@ -472,8 +478,7 @@ class OrderControllerTest {
             when(orderItemService.removeItem(1L, 100L))
                     .thenReturn(new OrderItemService.RemoveItemResult(
                             OrderItemService.Result.SUCCESS,
-                            new OrderItemService.Totals(50.0, 80.0)
-                    ));
+                            new OrderItemService.Totals(50.0, 80.0)));
 
             ResponseEntity<?> response = controller.removeItem(1L, 100L, ADMIN_AUTH);
 
@@ -534,12 +539,10 @@ class OrderControllerTest {
         @DisplayName("✅ Returns full response shape (no auth required)")
         void returnsResponse() {
             OrderStatsService.TopProduct top = new OrderStatsService.TopProduct(
-                    "Cake", "1 ปอนด์", "cake", 5L, 500L, 3L
-            );
+                    "Cake", "1 ปอนด์", "cake", 5L, 500L, 3L);
             when(orderStatsService.getTopProducts("7"))
                     .thenReturn(new OrderStatsService.TopProductsResult(
-                            List.of(top), 1000L, 10L, 5L, 1
-                    ));
+                            List.of(top), 1000L, 10L, 5L, 1));
 
             ResponseEntity<?> response = controller.topProducts("7", null);
 
@@ -555,8 +558,7 @@ class OrderControllerTest {
         void defaultDays_all() {
             when(orderStatsService.getTopProducts("all"))
                     .thenReturn(new OrderStatsService.TopProductsResult(
-                            List.of(), 0L, 0L, 0L, 0
-                    ));
+                            List.of(), 0L, 0L, 0L, 0));
 
             ResponseEntity<?> response = controller.topProducts("all", null);
 
