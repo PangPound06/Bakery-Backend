@@ -8,10 +8,13 @@ import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
 import com.app.my_project.repository.OrderRepository;
 import com.app.my_project.repository.OrderItemRepository;
+import com.app.my_project.service.JwtService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -41,6 +44,9 @@ public class DineInOrderController {
 
     @Autowired
     private OrderItemRepository orderItemRepository;
+
+    @Autowired
+    private JwtService jwtService;
 
     private static final int FRESH_STOCK_VALUE = 9999;
 
@@ -388,5 +394,45 @@ public class DineInOrderController {
             response.put("message", "ไม่พบออเดอร์");
             return ResponseEntity.badRequest().body(response);
         });
+    }
+
+    // ✅ Admin ลบข้อมูล dine-in ทั้งหมด
+    // ลบเฉพาะ tb_dinein_orders + tb_dinein_order_items เท่านั้น
+    // ไม่แตะ tb_orders / tb_order_items → หน้า Manage orders และ Top Products
+    // ไม่ได้รับผลกระทบ
+    @DeleteMapping("/admin/orders/all")
+    @Transactional
+    public ResponseEntity<?> deleteAllDineIn(
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        Map<String, Object> response = new HashMap<>();
+
+        // กันไว้: ต้องเป็น admin เท่านั้น (endpoint นี้ทำลายข้อมูลถาวร)
+        if (!jwtService.isAdmin(auth)) {
+            response.put("success", false);
+            response.put("message", "ต้องเป็นผู้ดูแลระบบเท่านั้น");
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
+        }
+
+        try {
+            long itemCount = dineInOrderItemRepository.count();
+            long orderCount = dineInOrderRepository.count();
+
+            // ลบตารางลูกก่อนตารางแม่ เพื่อกัน foreign key constraint
+            dineInOrderItemRepository.deleteAllInBatch();
+            dineInOrderRepository.deleteAllInBatch();
+
+            log.info("Admin ลบข้อมูล dine-in ทั้งหมด: {} orders, {} items", orderCount, itemCount);
+
+            response.put("success", true);
+            response.put("deletedOrders", orderCount);
+            response.put("deletedItems", itemCount);
+            response.put("message", "ลบข้อมูล dine-in ทั้งหมดแล้ว");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("ลบข้อมูล dine-in ไม่สำเร็จ", e);
+            response.put("success", false);
+            response.put("message", "ลบไม่สำเร็จ: " + e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
     }
 }
