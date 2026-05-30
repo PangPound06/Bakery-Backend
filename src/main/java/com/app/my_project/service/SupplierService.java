@@ -5,7 +5,9 @@ import com.app.my_project.models.SupplierRequest;
 import com.app.my_project.repository.SupplierRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import com.app.my_project.repository.PurchaseOrderRepository;
+import com.app.my_project.entity.PurchaseOrderEntity;
 
 import java.util.List;
 import java.util.Optional;
@@ -82,16 +84,15 @@ public class SupplierService {
         return supplierRepository.save(entity);
     }
 
+    @Transactional
     public void delete(Long id) {
         SupplierEntity entity = supplierRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Supplier not found: " + id));
 
-        // safety check: เช็คว่ามี PO ผูกอยู่ไหม
-        int poCount = purchaseOrderRepository.findBySupplierId(id).size();
-        if (poCount > 0) {
-            throw new RuntimeException(
-                    "ไม่สามารถลบได้ เนื่องจากมีคำสั่งซื้อ " + poCount + " รายการผูกอยู่ " +
-                            "กรุณาใช้ปุ่ม 'ระงับ' แทน หรือลบ PO ทั้งหมดก่อน");
+        // ลบ PO ที่ผูกกับ supplier นี้ทั้งหมดก่อน (cascade) แล้วค่อยลบ supplier
+        List<PurchaseOrderEntity> linkedPOs = purchaseOrderRepository.findBySupplierId(id);
+        if (!linkedPOs.isEmpty()) {
+            purchaseOrderRepository.deleteAll(linkedPOs);
         }
 
         supplierRepository.delete(entity);
