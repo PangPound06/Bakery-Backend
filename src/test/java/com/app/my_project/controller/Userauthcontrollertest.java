@@ -1,6 +1,7 @@
 package com.app.my_project.controller;
 
 import com.app.my_project.common.AuthGuard;
+import com.app.my_project.common.LoginRateLimiter;
 import com.app.my_project.entity.AdminEntity;
 import com.app.my_project.entity.UserEntity;
 import com.app.my_project.repository.*;
@@ -49,6 +50,7 @@ class UserAuthControllerTest {
     @Mock private DataSource dataSource;
     @Mock private JwtService jwtService;
     @Mock private AuthGuard authGuard;
+    @Mock private LoginRateLimiter loginRateLimiter;
 
     private UserAuthController controller;
 
@@ -57,7 +59,8 @@ class UserAuthControllerTest {
         controller = new UserAuthController(
                 userRepository, adminRepository, passwordEncoder,
                 userProfileRepository, orderRepository, orderItemRepository,
-                favoriteRepository, dataSource, jwtService, authGuard);
+                favoriteRepository, dataSource, jwtService, authGuard,
+                loginRateLimiter);
     }
 
     private Map<String, String> loginRequest(String email, String password) {

@@ -1,6 +1,7 @@
 package com.app.my_project.controller;
 
 import com.app.my_project.common.AuthGuard;
+import com.app.my_project.common.LoginRateLimiter;
 import com.app.my_project.entity.AdminEntity;
 import com.app.my_project.repository.AdminRepository;
 import com.app.my_project.repository.UserRepository;
@@ -42,13 +43,15 @@ class AdminAuthControllerTest {
     @Mock private BCryptPasswordEncoder passwordEncoder;
     @Mock private JwtService jwtService;
     @Mock private AuthGuard authGuard;
+    @Mock private LoginRateLimiter loginRateLimiter;
 
     private AdminAuthController controller;
 
     @BeforeEach
     void setUp() {
         controller = new AdminAuthController(
-                adminRepository, userRepository, passwordEncoder, jwtService, authGuard);
+                adminRepository, userRepository, passwordEncoder, jwtService, authGuard,
+                loginRateLimiter);
     }
 
     private Map<String, String> loginRequest(String email, String password) {

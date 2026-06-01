@@ -2,6 +2,12 @@ package com.app.my_project.controller;
 
 import com.app.my_project.common.ApiResponse;
 import com.app.my_project.common.AuthGuard;
+import com.app.my_project.common.AuthValidation;
+import com.app.my_project.common.LoginRateLimiter;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import com.app.my_project.entity.AdminEntity;
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.UserEntity;
@@ -61,6 +67,7 @@ public class UserAuthController {
     private final DataSource dataSource;
     private final JwtService jwtService;
     private final AuthGuard authGuard;
+    private final LoginRateLimiter loginRateLimiter;
 
     @Value("${google.client.id}")
     private String clientId;
@@ -80,7 +87,8 @@ public class UserAuthController {
             FavoriteRepository favoriteRepository,
             DataSource dataSource,
             JwtService jwtService,
-            AuthGuard authGuard) {
+            AuthGuard authGuard,
+            LoginRateLimiter loginRateLimiter) {
         this.userRepository = userRepository;
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
@@ -91,6 +99,7 @@ public class UserAuthController {
         this.dataSource = dataSource;
         this.jwtService = jwtService;
         this.authGuard = authGuard;
+        this.loginRateLimiter = loginRateLimiter;
     }
 
     // ─── Helper ─────────────────────────────────────────────────────────
@@ -124,10 +133,28 @@ public class UserAuthController {
         }
         email = email.trim();
 
+        // ── validate รูปแบบ/ความยาว ──
+        if (!AuthValidation.withinLength(email, AuthValidation.MAX_EMAIL_LEN)
+                || !AuthValidation.withinLength(password, AuthValidation.MAX_PASSWORD_LEN)) {
+            return ApiResponse.badRequest("อีเมลหรือรหัสผ่านยาวเกินกำหนด");
+        }
+        if (!AuthValidation.isValidEmailFormat(email)) {
+            return ApiResponse.badRequest("รูปแบบอีเมลไม่ถูกต้อง");
+        }
+
+        // ── rate limit ต่อ IP (กัน brute-force) ──
+        String clientKey = clientIp();
+        if (loginRateLimiter.isBlocked(clientKey)) {
+            long retry = loginRateLimiter.retryAfterSeconds(clientKey);
+            return ApiResponse.error(HttpStatus.TOO_MANY_REQUESTS,
+                    "พยายามเข้าสู่ระบบบ่อยเกินไป กรุณาลองใหม่ใน " + retry + " วินาที");
+        }
+
         // ── ลอง admin ก่อน ──
         Optional<AdminEntity> adminOpt = adminRepository.findByEmailIgnoreCase(email);
         if (adminOpt.isPresent() && passwordEncoder.matches(password, adminOpt.get().getPassword())) {
             AdminEntity admin = adminOpt.get();
+            loginRateLimiter.reset(clientKey);
             // ✅ ใส่ role="ADMIN" (เดิม bug: ใส่เป็น USER ทำให้ admin จัดการอะไรไม่ได้)
             String token = jwtService.generateToken(admin.getId(), JwtService.ROLE_ADMIN);
 
@@ -150,6 +177,7 @@ public class UserAuthController {
             }
 
             if (user.getPassword() != null && passwordEncoder.matches(password, user.getPassword())) {
+                loginRateLimiter.reset(clientKey);
                 String token = jwtService.generateToken(user.getId(), JwtService.ROLE_USER);
 
                 Map<String, Object> data = new HashMap<>();
@@ -161,7 +189,23 @@ public class UserAuthController {
             }
         }
 
+        // ล็อกอินล้มเหลว → นับเข้า rate limit
+        loginRateLimiter.recordFailure(clientKey);
         return ApiResponse.badRequest("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
+    }
+
+    /** ดึง client IP จาก request ปัจจุบัน (รองรับ proxy ผ่าน X-Forwarded-For) */
+    private String clientIp() {
+        ServletRequestAttributes attrs =
+                (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (attrs == null)
+            return "unknown";
+        HttpServletRequest req = attrs.getRequest();
+        String xff = req.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            return xff.split(",")[0].trim();
+        }
+        return req.getRemoteAddr();
     }
 
     // GOOGLE OAUTH

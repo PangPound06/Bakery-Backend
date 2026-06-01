@@ -169,6 +169,8 @@ class ProductControllerTest {
         @Test
         @DisplayName("ไม่มี token → 401 และไม่เรียก service")
         void unauthorized() {
+            when(jwtService.getUserIdFromHeader(BAD_AUTH)).thenReturn(null);
+
             ResponseEntity<?> res = controller.createProduct(BAD_AUTH, makeRequest("เค้ก"));
 
             assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -242,6 +244,8 @@ class ProductControllerTest {
         @Test
         @DisplayName("ไม่มี token → 401 และไม่เรียก service")
         void unauthorized() {
+            when(jwtService.getUserIdFromHeader(BAD_AUTH)).thenReturn(null);
+
             ResponseEntity<?> res = controller.updateProduct(BAD_AUTH, 1L, makeRequest("เค้ก"));
 
             assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -308,6 +312,8 @@ class ProductControllerTest {
         @Test
         @DisplayName("ไม่มี token → 401 และไม่เรียก service")
         void unauthorized() {
+            when(jwtService.getUserIdFromHeader(BAD_AUTH)).thenReturn(null);
+
             ResponseEntity<?> res = controller.deleteProduct(BAD_AUTH, 1L);
 
             assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);

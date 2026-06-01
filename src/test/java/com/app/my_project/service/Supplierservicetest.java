@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -32,8 +33,10 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class SupplierServiceTest {
 
-    @Mock private SupplierRepository supplierRepository;
-    @Mock private PurchaseOrderRepository purchaseOrderRepository;
+    @Mock
+    private SupplierRepository supplierRepository;
+    @Mock
+    private PurchaseOrderRepository purchaseOrderRepository;
 
     @InjectMocks
     private SupplierService supplierService;
@@ -134,22 +137,21 @@ class SupplierServiceTest {
         }
 
         @Test
-        @DisplayName("มี PO ผูกอยู่ → throw exception + message บอกจำนวน")
-        void delete_hasPurchaseOrders_throwsExceptionWithCount() {
-            when(supplierRepository.findById(1L)).thenReturn(Optional.of(sampleSupplier));
-            when(purchaseOrderRepository.findBySupplierId(1L))
-                    .thenReturn(List.of(
-                            new PurchaseOrderEntity(),
-                            new PurchaseOrderEntity(),
-                            new PurchaseOrderEntity()
-                    )); // มี PO 3 รายการ
+        @DisplayName("ลบ supplier ที่มี PO → ลบ PO ที่ผูกอยู่ทั้งหมดแล้วลบ supplier (ไม่ throw)")
+        void delete_hasPurchaseOrders_cascadeDeletes() {
+            SupplierEntity supplier = new SupplierEntity();
+            supplier.setId(1L);
+            List<PurchaseOrderEntity> linkedPOs = List.of(new PurchaseOrderEntity());
 
-            assertThatThrownBy(() -> supplierService.delete(1L))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("3 รายการ"); // ต้องบอกจำนวนใน error
+            when(supplierRepository.findById(1L)).thenReturn(Optional.of(supplier));
+            when(purchaseOrderRepository.findBySupplierId(1L)).thenReturn(linkedPOs);
 
-            // ตรวจว่าไม่ได้เรียก delete จริง — safety check ทำงาน
-            verify(supplierRepository, never()).delete(any());
+            // ไม่ควร throw อีกต่อไป
+            assertThatCode(() -> supplierService.delete(1L)).doesNotThrowAnyException();
+
+            // ลบ PO ก่อน แล้วจึงลบ supplier
+            verify(purchaseOrderRepository).deleteAll(linkedPOs);
+            verify(supplierRepository).delete(supplier);
         }
 
         @Test
