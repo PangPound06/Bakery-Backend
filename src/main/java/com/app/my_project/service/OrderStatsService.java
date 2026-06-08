@@ -94,7 +94,6 @@ public class OrderStatsService {
         // Top 10 by qty
         List<TopProduct> topList = grouped.entrySet().stream()
                 .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
-                .limit(10)
                 .map(entry -> {
                     String[] parts = entry.getKey().split("\\|\\|\\|", 3);
                     return new TopProduct(
