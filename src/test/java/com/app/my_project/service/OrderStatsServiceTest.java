@@ -164,7 +164,7 @@ class OrderStatsServiceTest {
 
             OrderStatsService.TopProductsResult result = service.getTopProducts("all");
 
-            assertThat(result.topProducts()).hasSize(10);
+            assertThat(result.topProducts()).hasSize(15);
             // totalProductCount = 15 (ทั้งหมด ไม่ใช่แค่ top 10)
             assertThat(result.totalProductCount()).isEqualTo(15);
         }

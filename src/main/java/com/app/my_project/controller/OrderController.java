@@ -2,6 +2,7 @@ package com.app.my_project.controller;
 
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
+import com.app.my_project.entity.StoreSettingEntity;
 import com.app.my_project.repository.AdminRepository;
 import com.app.my_project.repository.OrderItemRepository;
 import com.app.my_project.service.JwtService;
@@ -9,6 +10,7 @@ import com.app.my_project.service.OrderItemService;
 import com.app.my_project.service.OrderService;
 import com.app.my_project.service.OrderStatsService;
 import com.app.my_project.service.StockService;
+import com.app.my_project.service.StoreSettingService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -53,6 +55,7 @@ public class OrderController {
     private final StockService stockService;
     private final JwtService jwtService;
     private final AdminRepository adminRepository;
+    private final StoreSettingService storeSettingService;
 
     public OrderController(OrderService orderService,
             OrderItemService orderItemService,
@@ -60,7 +63,8 @@ public class OrderController {
             OrderItemRepository orderItemRepository,
             StockService stockService,
             JwtService jwtService,
-            AdminRepository adminRepository) {
+            AdminRepository adminRepository,
+            StoreSettingService storeSettingService) {
         this.orderService = orderService;
         this.orderItemService = orderItemService;
         this.orderStatsService = orderStatsService;
@@ -68,6 +72,7 @@ public class OrderController {
         this.stockService = stockService;
         this.jwtService = jwtService;
         this.adminRepository = adminRepository;
+        this.storeSettingService = storeSettingService;
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -84,6 +89,22 @@ public class OrderController {
 
         try {
             OrderService.CreateOrderRequest req = parseCreateRequest(body);
+
+            // กันสั่งออเดอร์ออนไลน์ตอนร้านปิดรับ (ไม่กระทบ pos / dine-in)
+            if ("online".equalsIgnoreCase(req.orderType())
+                    && !storeSettingService.isOnlineOrderingOpen()) {
+                StoreSettingEntity st = storeSettingService.getStatus();
+                String msg = (st.getClosedMessage() != null && !st.getClosedMessage().isBlank())
+                        ? st.getClosedMessage()
+                        : "ขณะนี้ร้านปิดรับออเดอร์ออนไลน์ชั่วคราว";
+                Map<String, Object> resp = new HashMap<>();
+                resp.put("success", false);
+                resp.put("error", msg);
+                resp.put("storeClosed", true);
+                resp.put("reopenAt", st.getReopenAt() == null ? "" : st.getReopenAt());
+                return ResponseEntity.status(403).body(resp);
+            }
+
             OrderEntity saved = orderService.createOrder(email, req);
             return ResponseEntity.ok(Map.of(
                     "success", true,
