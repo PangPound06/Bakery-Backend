@@ -6,7 +6,6 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -21,13 +20,17 @@ import javax.sql.DataSource;
 @RequestMapping("/api/cart")
 public class CartController {
 
+    public CartController(
+            DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(CartController.class);
 
     @Value("${jwt.secret}")
     private String jwtSecret;
 
-    @Autowired
-    private DataSource dataSource;
+    private final DataSource dataSource;
 
     public static class AddToCartRequest {
         private Long productId;

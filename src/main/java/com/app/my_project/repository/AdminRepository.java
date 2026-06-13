@@ -4,12 +4,10 @@ import com.app.my_project.entity.AdminEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
 
-@Repository
 public interface AdminRepository extends JpaRepository<AdminEntity, Long> {
     
     // ค้นหาแบบไม่สนใจตัวพิมพ์เล็ก/ใหญ่

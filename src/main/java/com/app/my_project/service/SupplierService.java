@@ -3,7 +3,6 @@ package com.app.my_project.service;
 import com.app.my_project.entity.SupplierEntity;
 import com.app.my_project.models.SupplierRequest;
 import com.app.my_project.repository.SupplierRepository;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.app.my_project.repository.PurchaseOrderRepository;
@@ -15,11 +14,15 @@ import java.util.Optional;
 @Service
 public class SupplierService {
 
-    @Autowired
-    private SupplierRepository supplierRepository;
+    public SupplierService(
+            SupplierRepository supplierRepository,
+            PurchaseOrderRepository purchaseOrderRepository) {
+        this.supplierRepository = supplierRepository;
+        this.purchaseOrderRepository = purchaseOrderRepository;
+    }
 
-    @Autowired
-    private PurchaseOrderRepository purchaseOrderRepository;
+    private final SupplierRepository supplierRepository;
+    private final PurchaseOrderRepository purchaseOrderRepository;
 
     public List<SupplierEntity> getAll(String search, String category, String status) {
         List<SupplierEntity> all;

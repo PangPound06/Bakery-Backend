@@ -3,7 +3,6 @@ package com.app.my_project.controller;
 import com.app.my_project.entity.SupplierEntity;
 import com.app.my_project.models.SupplierRequest;
 import com.app.my_project.service.SupplierService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -15,8 +14,12 @@ import java.util.List;
 
 public class SupplierController {
 
-    @Autowired
-    private SupplierService supplierService;
+    public SupplierController(
+            SupplierService supplierService) {
+        this.supplierService = supplierService;
+    }
+
+    private final SupplierService supplierService;
 
     @GetMapping
     public ResponseEntity<List<SupplierEntity>> getAll(

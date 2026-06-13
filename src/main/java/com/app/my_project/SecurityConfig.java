@@ -1,6 +1,5 @@
 package com.app.my_project;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -25,14 +24,19 @@ import java.util.List;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    public SecurityConfig(
+            UserRepository userRepository,
+            AdminRepository adminRepository) {
+        this.userRepository = userRepository;
+        this.adminRepository = adminRepository;
+    }
+
     @Value("${jwt.secret}")
     private String jwtSecret;
 
-    @Autowired
-    private UserRepository userRepository;
+    private final UserRepository userRepository;
 
-    @Autowired
-    private AdminRepository adminRepository;
+    private final AdminRepository adminRepository;
 
     @Bean
     public BCryptPasswordEncoder passwordEncoder() {
@@ -61,7 +65,8 @@ public class SecurityConfig {
     }
 
     /**
-     * ✅ ใช้ @Bean CorsFilter เพื่อให้ register เป็น servlet filter ที่ระดับ application
+     * ✅ ใช้ @Bean CorsFilter เพื่อให้ register เป็น servlet filter ที่ระดับ
+     * application
      * ทำงาน "ก่อน" Spring Security filter chain ทั้งหมด
      * รวมถึงก่อน JwtAuthFilter — กัน 401/403 ที่ไม่มี CORS headers
      */

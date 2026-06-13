@@ -9,7 +9,6 @@ import com.app.my_project.service.OTPService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
@@ -22,22 +21,30 @@ import java.util.Optional;
 @RequestMapping("/api/auth")
 public class PasswordResetController {
 
+    public PasswordResetController(
+            UserRepository userRepository,
+            AdminRepository adminRepository,
+            OTPService otpService,
+            EmailService emailService,
+            BCryptPasswordEncoder passwordEncoder) {
+        this.userRepository = userRepository;
+        this.adminRepository = adminRepository;
+        this.otpService = otpService;
+        this.emailService = emailService;
+        this.passwordEncoder = passwordEncoder;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(PasswordResetController.class);
 
-    @Autowired
-    private UserRepository userRepository;
+    private final UserRepository userRepository;
 
-    @Autowired
-    private AdminRepository adminRepository;
+    private final AdminRepository adminRepository;
 
-    @Autowired
-    private OTPService otpService;
+    private final OTPService otpService;
 
-    @Autowired
-    private EmailService emailService;
+    private final EmailService emailService;
 
-    @Autowired
-    private BCryptPasswordEncoder passwordEncoder;
+    private final BCryptPasswordEncoder passwordEncoder;
 
      // ขอรหัส OTP - ส่งไปยังอีเมล (ค้นหาทั้ง User และ Admin)
     @PostMapping("/forgot-password")

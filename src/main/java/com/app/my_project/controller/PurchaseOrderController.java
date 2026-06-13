@@ -3,7 +3,6 @@ package com.app.my_project.controller;
 import com.app.my_project.entity.PurchaseOrderEntity;
 import com.app.my_project.models.PurchaseOrderRequest;
 import com.app.my_project.service.PurchaseOrderService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -15,8 +14,12 @@ import java.util.Map;
 
 public class PurchaseOrderController {
 
-    @Autowired
-    private PurchaseOrderService poService;
+    public PurchaseOrderController(
+            PurchaseOrderService poService) {
+        this.poService = poService;
+    }
+
+    private final PurchaseOrderService poService;
 
     // GET /api/purchase-orders
     @GetMapping

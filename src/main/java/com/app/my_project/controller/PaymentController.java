@@ -2,7 +2,6 @@ package com.app.my_project.controller;
 
 import com.app.my_project.service.QRCodeService;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,8 +12,12 @@ import java.util.Map;
 @RequestMapping("/api/payment")
 public class PaymentController {
 
-    @Autowired
-    private QRCodeService qrCodeService;
+    public PaymentController(
+            QRCodeService qrCodeService) {
+        this.qrCodeService = qrCodeService;
+    }
+
+    private final QRCodeService qrCodeService;
 
     // QR PROMPTPAY
     @PostMapping("/promptpay/generate")

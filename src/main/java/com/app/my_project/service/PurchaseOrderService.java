@@ -3,7 +3,6 @@ package com.app.my_project.service;
 import com.app.my_project.entity.PurchaseOrderEntity;
 import com.app.my_project.models.PurchaseOrderRequest;
 import com.app.my_project.repository.PurchaseOrderRepository;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -12,8 +11,12 @@ import java.util.List;
 @Service
 public class PurchaseOrderService {
 
-    @Autowired
-    private PurchaseOrderRepository poRepository;
+    public PurchaseOrderService(
+            PurchaseOrderRepository poRepository) {
+        this.poRepository = poRepository;
+    }
+
+    private final PurchaseOrderRepository poRepository;
 
     public List<PurchaseOrderEntity> getAll() {
         return poRepository.findAll();

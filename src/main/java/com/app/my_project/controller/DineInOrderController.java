@@ -11,7 +11,6 @@ import com.app.my_project.repository.OrderItemRepository;
 import com.app.my_project.service.JwtService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,25 +27,34 @@ import java.sql.PreparedStatement;
 @RequestMapping("/api/dinein")
 public class DineInOrderController {
 
+    public DineInOrderController(
+            DineInOrderRepository dineInOrderRepository,
+            DineInOrderItemRepository dineInOrderItemRepository,
+            DataSource dataSource,
+            OrderRepository orderRepository,
+            OrderItemRepository orderItemRepository,
+            JwtService jwtService) {
+        this.dineInOrderRepository = dineInOrderRepository;
+        this.dineInOrderItemRepository = dineInOrderItemRepository;
+        this.dataSource = dataSource;
+        this.orderRepository = orderRepository;
+        this.orderItemRepository = orderItemRepository;
+        this.jwtService = jwtService;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(DineInOrderController.class);
 
-    @Autowired
-    private DineInOrderRepository dineInOrderRepository;
+    private final DineInOrderRepository dineInOrderRepository;
 
-    @Autowired
-    private DineInOrderItemRepository dineInOrderItemRepository;
+    private final DineInOrderItemRepository dineInOrderItemRepository;
 
-    @Autowired
-    private DataSource dataSource;
+    private final DataSource dataSource;
 
-    @Autowired
-    private OrderRepository orderRepository;
+    private final OrderRepository orderRepository;
 
-    @Autowired
-    private OrderItemRepository orderItemRepository;
+    private final OrderItemRepository orderItemRepository;
 
-    @Autowired
-    private JwtService jwtService;
+    private final JwtService jwtService;
 
     private static final int FRESH_STOCK_VALUE = 9999;
 

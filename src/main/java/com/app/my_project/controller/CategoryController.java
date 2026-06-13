@@ -2,7 +2,6 @@ package com.app.my_project.controller;
 
 import com.app.my_project.entity.CategoryEntity;
 import com.app.my_project.repository.CategoryRepository;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import com.app.my_project.repository.ProductRepository;
@@ -14,11 +13,16 @@ import java.util.*;
 @RequestMapping("/api/categories")
 public class CategoryController {
 
-    @Autowired
-    private CategoryRepository categoryRepository;
+    public CategoryController(
+            CategoryRepository categoryRepository,
+            ProductRepository productRepository) {
+        this.categoryRepository = categoryRepository;
+        this.productRepository = productRepository;
+    }
 
-    @Autowired
-    private ProductRepository productRepository;
+    private final CategoryRepository categoryRepository;
+
+    private final ProductRepository productRepository;
 
     @GetMapping
     public ResponseEntity<?> getAll() {
