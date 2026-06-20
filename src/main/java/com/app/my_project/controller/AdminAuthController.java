@@ -19,8 +19,14 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
 /**
  * Admin authentication & management
@@ -194,6 +200,65 @@ public class AdminAuthController {
         // ✅ ส่ง array โดยตรง compat กับ frontend
         return ResponseEntity.ok(
                 adminRepository.findAll().stream().map(this::buildAdminData).toList());
+    }
+
+    // ✅ แบ่งหน้า + กรองบทบาท/ค้นหา (server-side) — ไม่ดึง admin ทั้งหมด
+    @GetMapping("/page")
+    public ResponseEntity<?> getAdminsPage(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String role,
+            @RequestParam(required = false) String search) {
+        if (authGuard.requireAuth(authHeader) == null)
+            return ApiResponse.unauthorized();
+        if (!authGuard.isAdmin(authHeader))
+            return ApiResponse.forbidden();
+
+        int p = Math.max(page, 0);
+        int s = size < 1 ? 10 : Math.min(size, 100);
+        String roleParam = (role == null || role.isBlank() || "all".equalsIgnoreCase(role))
+                ? null
+                : role.trim();
+        String searchParam = (search == null || search.isBlank()) ? null : search.trim();
+
+        Pageable pageable = PageRequest.of(p, s, Sort.by(Sort.Direction.ASC, "id"));
+        Page<AdminEntity> result = adminRepository.search(roleParam, searchParam, pageable);
+
+        List<Map<String, Object>> content = result.getContent().stream()
+                .map(this::buildAdminData).toList();
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("content", content);
+        body.put("page", result.getNumber());
+        body.put("size", result.getSize());
+        body.put("totalElements", result.getTotalElements());
+        body.put("totalPages", result.getTotalPages());
+        return ResponseEntity.ok(body);
+    }
+
+    // ✅ จำนวน admin ต่อบทบาท + ทั้งหมด (สำหรับ badge บนแท็บ โดยไม่ต้องดึงทั้งตาราง)
+    @GetMapping("/role-counts")
+    public ResponseEntity<?> getRoleCounts(
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        if (authGuard.requireAuth(authHeader) == null)
+            return ApiResponse.unauthorized();
+        if (!authGuard.isAdmin(authHeader))
+            return ApiResponse.forbidden();
+
+        Map<String, Long> counts = new LinkedHashMap<>();
+        long total = 0L;
+        for (Object[] row : adminRepository.countGroupedByRole()) {
+            String role = row[0] != null ? row[0].toString() : "admin";
+            long cnt = ((Number) row[1]).longValue();
+            counts.put(role, cnt);
+            total += cnt;
+        }
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("counts", counts);
+        body.put("total", total);
+        return ResponseEntity.ok(body);
     }
 
     @GetMapping("/{id}")
