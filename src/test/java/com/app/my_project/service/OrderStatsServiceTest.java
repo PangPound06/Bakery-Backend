@@ -72,7 +72,7 @@ class OrderStatsServiceTest {
         @Test
         @DisplayName("Rows ว่าง → empty result")
         void emptyRows_returnsEmpty() {
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of());
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of());
 
             OrderStatsService.TopProductsResult result = service.getTopProducts("all");
 
@@ -87,7 +87,7 @@ class OrderStatsServiceTest {
         @DisplayName("✅ Single product: qty + revenue + orderCount ถูกต้อง")
         void singleProduct_correctAggregates() {
             // 1 row: cake 1 ปอนด์, raw qty 8 (= 1 display), price 100, orderSubtotal 100
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 800.0, "cake")
             ));
 
@@ -111,7 +111,7 @@ class OrderStatsServiceTest {
         @Test
         @DisplayName("✅ Same productName+option+category → group เป็น 1 entry")
         void sameKey_groupedIntoOne() {
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 800.0, "cake"),
                     row("Cake", 100.0, 16, "1 ปอนด์", LocalDateTime.now(), 200.0, 1600.0, "cake")
             ));
@@ -126,7 +126,7 @@ class OrderStatsServiceTest {
         @Test
         @DisplayName("✅ ต่าง option (1 vs 2 ปอนด์) → แยกเป็น 2 entries")
         void differentOption_separateEntries() {
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 800.0, "cake"),
                     row("Cake", 200.0, 16, "2 ปอนด์", LocalDateTime.now(), 200.0, 3200.0, "cake")
             ));
@@ -139,7 +139,7 @@ class OrderStatsServiceTest {
         @Test
         @DisplayName("✅ Sort by totalQty DESC")
         void sortedByQtyDesc() {
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("ProductA", 100.0, 1, null, LocalDateTime.now(), 100.0, 100.0, "cat"),
                     row("ProductB", 100.0, 5, null, LocalDateTime.now(), 500.0, 500.0, "cat"),
                     row("ProductC", 100.0, 3, null, LocalDateTime.now(), 300.0, 300.0, "cat")
@@ -160,7 +160,7 @@ class OrderStatsServiceTest {
             for (int i = 1; i <= 15; i++) {
                 rows.add(row("P" + i, 100.0, i, null, LocalDateTime.now(), 100.0, 100.0, "cat"));
             }
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(rows);
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(rows);
 
             OrderStatsService.TopProductsResult result = service.getTopProducts("all");
 
@@ -181,7 +181,7 @@ class OrderStatsServiceTest {
             LocalDateTime old = LocalDateTime.now().minusDays(10);
             LocalDateTime recent = LocalDateTime.now().minusDays(3);
 
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("Old Order", 100.0, 1, null, old, 100.0, 100.0, "cat"),
                     row("Recent Order", 100.0, 1, null, recent, 100.0, 100.0, "cat")
             ));
@@ -198,7 +198,7 @@ class OrderStatsServiceTest {
             LocalDateTime old = LocalDateTime.now().minusDays(40);
             LocalDateTime recent = LocalDateTime.now().minusDays(20);
 
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("Very Old", 100.0, 1, null, old, 100.0, 100.0, "cat"),
                     row("Last Month", 100.0, 1, null, recent, 100.0, 100.0, "cat")
             ));
@@ -214,7 +214,7 @@ class OrderStatsServiceTest {
         void daysAll_noFilter() {
             LocalDateTime veryOld = LocalDateTime.now().minusYears(5);
 
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("Ancient", 100.0, 1, null, veryOld, 100.0, 100.0, "cat")
             ));
 
@@ -305,7 +305,7 @@ class OrderStatsServiceTest {
             // price=50, qty=2 → itemRaw = 100
             // orderItemsTotal = 200, orderSubtotal = 150
             // ratio = 100/200 = 0.5 → revenue = 150 * 0.5 = 75
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("Product", 50.0, 2, null, LocalDateTime.now(), 150.0, 200.0, "cat")
             ));
 
@@ -317,7 +317,7 @@ class OrderStatsServiceTest {
         @Test
         @DisplayName("orderItemsTotal = 0 → revenue = 0 (กัน divide by zero)")
         void zeroItemsTotal_zeroRevenue() {
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
                     row("Product", 50.0, 2, null, LocalDateTime.now(), 150.0, 0.0, "cat")
             ));
 
@@ -333,7 +333,7 @@ class OrderStatsServiceTest {
             for (int i = 1; i <= 15; i++) {
                 rows.add(row("P" + i, 100.0, i, null, LocalDateTime.now(), 100.0, 100.0, "cat"));
             }
-            when(jdbcTemplate.queryForList(anyString())).thenReturn(rows);
+            when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(rows);
 
             OrderStatsService.TopProductsResult result = service.getTopProducts("all");
 

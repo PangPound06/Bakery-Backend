@@ -5,6 +5,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.sql.Timestamp;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,8 +25,9 @@ public class OrderStatsService {
             "SELECT oi.product_name, oi.price, oi.quantity, oi.selected_option, " +
             "  o.created_at, o.subtotal, " +
             "  COALESCE(p.category, 'unknown') as category, " +
-            "  (SELECT SUM(oi2.price * oi2.quantity) FROM tb_order_items oi2 " +
-            "    WHERE oi2.order_id = o.id) as order_items_total " +
+            // ✅ window function — คำนวณ order_items_total ต่อ order ใน pass เดียว
+            //    (แทน correlated subquery ที่รันซ้ำต่อแถว)
+            "  SUM(oi.price * oi.quantity) OVER (PARTITION BY oi.order_id) as order_items_total " +
             "FROM tb_order_items oi " +
             "JOIN tb_orders o ON oi.order_id = o.id " +
             "LEFT JOIN tb_products p ON oi.product_id = p.id " +
@@ -33,7 +35,9 @@ public class OrderStatsService {
             "  (o.order_type = 'pos' AND o.order_status != 'cancelled') " +
             "  OR " +
             "  (o.order_status IN ('confirmed', 'preparing', 'shipping', 'delivered')) " +
-            ")";
+            ") " +
+            // ✅ กรองช่วงวันใน SQL — days=7/30 จะสแกนเฉพาะช่วงที่ต้องการ
+            "AND o.created_at >= ?";
 
     private final JdbcTemplate jdbcTemplate;
     private final ProductQuantityHelper qtyHelper;
@@ -49,8 +53,10 @@ public class OrderStatsService {
      */
     public TopProductsResult getTopProducts(String days) {
         LocalDateTime cutoff = resolveCutoff(days);
+        Timestamp cutoffTs = toCutoffTimestamp(cutoff);
 
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(TOP_PRODUCTS_SQL);
+        // ✅ กรองวันที่ใน SQL แล้ว (ดึงเฉพาะช่วงที่ต้องการ) — ไม่ดึง order_items ทั้งตารางมา loop
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(TOP_PRODUCTS_SQL, cutoffTs);
 
         // Aggregation: group โดยใช้ key = productName|||selectedOption|||category
         Map<String, long[]> grouped = new LinkedHashMap<>(); // [qty, revenue, orderCount]
@@ -113,6 +119,14 @@ public class OrderStatsService {
     }
 
     // ─── Helpers (package-private สำหรับ test) ────────────────────
+
+    /** แปลง cutoff → Timestamp สำหรับ SQL param; "all" (MIN) → floor ปี 1970 (เท่ากับไม่กรอง) */
+    private Timestamp toCutoffTimestamp(LocalDateTime cutoff) {
+        if (cutoff == null || cutoff.isEqual(LocalDateTime.MIN)) {
+            return Timestamp.valueOf(LocalDateTime.of(1970, 1, 1, 0, 0));
+        }
+        return Timestamp.valueOf(cutoff);
+    }
 
     LocalDateTime resolveCutoff(String days) {
         if (days == null || "all".equals(days)) return LocalDateTime.MIN;

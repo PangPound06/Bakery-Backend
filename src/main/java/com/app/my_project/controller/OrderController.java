@@ -5,6 +5,8 @@ import com.app.my_project.entity.OrderItemEntity;
 import com.app.my_project.entity.StoreSettingEntity;
 import com.app.my_project.repository.AdminRepository;
 import com.app.my_project.repository.OrderItemRepository;
+import com.app.my_project.repository.UserRepository;
+import com.app.my_project.entity.UserEntity;
 import com.app.my_project.service.JwtService;
 import com.app.my_project.service.OrderItemService;
 import com.app.my_project.service.OrderService;
@@ -12,6 +14,9 @@ import com.app.my_project.service.OrderStatsService;
 import com.app.my_project.service.StockService;
 import com.app.my_project.service.StoreSettingService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -56,6 +61,7 @@ public class OrderController {
     private final JwtService jwtService;
     private final AdminRepository adminRepository;
     private final StoreSettingService storeSettingService;
+    private final UserRepository userRepository;
 
     public OrderController(OrderService orderService,
             OrderItemService orderItemService,
@@ -64,7 +70,8 @@ public class OrderController {
             StockService stockService,
             JwtService jwtService,
             AdminRepository adminRepository,
-            StoreSettingService storeSettingService) {
+            StoreSettingService storeSettingService,
+            UserRepository userRepository) {
         this.orderService = orderService;
         this.orderItemService = orderItemService;
         this.orderStatsService = orderStatsService;
@@ -73,6 +80,7 @@ public class OrderController {
         this.jwtService = jwtService;
         this.adminRepository = adminRepository;
         this.storeSettingService = storeSettingService;
+        this.userRepository = userRepository;
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -158,12 +166,11 @@ public class OrderController {
     // ═════════════════════════════════════════════════════════════════
 
     @GetMapping("/user/{email}")
-    public ResponseEntity<?> getByEmail(@PathVariable String email) {
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (OrderEntity o : orderService.getByEmail(email)) {
-            result.add(orderToMap(o, loadItems(o.getId())));
-        }
-        return ResponseEntity.ok(result);
+    public ResponseEntity<?> getByEmail(@PathVariable String email,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ResponseEntity.ok(
+                pageEnvelope(orderService.getByEmail(email, parsePageable(page, size))));
     }
 
     @GetMapping("/{id}")
@@ -184,15 +191,14 @@ public class OrderController {
     }
 
     @GetMapping("/all")
-    public ResponseEntity<?> getAll(@RequestHeader(value = "Authorization", required = false) String auth) {
+    public ResponseEntity<?> getAll(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
         if (!isAdmin(auth))
             return forbidden();
 
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (OrderEntity o : orderService.getAll()) {
-            result.add(orderToMap(o, loadItems(o.getId())));
-        }
-        return ResponseEntity.ok(result);
+        return ResponseEntity.ok(
+                pageEnvelope(orderService.getAll(parsePageable(page, size))));
     }
 
     @GetMapping("/search/{orderCode}")
@@ -213,22 +219,22 @@ public class OrderController {
     }
 
     @GetMapping("/my-dine-in")
-    public ResponseEntity<?> getMyDineIn(@RequestHeader(value = "Authorization", required = false) String auth) {
+    public ResponseEntity<?> getMyDineIn(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
         Long userId = jwtService.getUserIdFromHeader(auth);
         if (userId == null)
             return unauthorized();
 
-        // ดึง orders ของ user ที่เป็น dine-in
-        List<Map<String, Object>> result = new ArrayList<>();
-        // หาจาก email ของ user — ในที่นี้ controller ไม่มี UserRepository
-        // → ใช้ filter จาก getAll() (สำหรับ admin) หรือต้องเสริม method ใหม่
-        // ใน scope นี้: ใช้ approach ผ่าน getAll แล้ว filter ที่ controller
-        for (OrderEntity o : orderService.getAll()) {
-            if ("dine-in".equals(o.getOrderType())) {
-                result.add(orderToMap(o, loadItems(o.getId())));
-            }
-        }
-        return ResponseEntity.ok(result);
+        // ✅ ดึงเฉพาะ dine-in ของ user คนนี้โดยตรง (เลิกดึง getAll() แล้ว filter ใน Java)
+        String email = userRepository.findById(userId)
+                .map(UserEntity::getEmail)
+                .orElse(null);
+        if (email == null)
+            return unauthorized();
+
+        return ResponseEntity.ok(
+                pageEnvelope(orderService.getDineInByEmail(email, parsePageable(page, size))));
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -368,26 +374,73 @@ public class OrderController {
         return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
     }
 
-    /** ดึง items ของ order + เติม image จาก product ถ้า item.image == null */
+    /** แปลง OrderItemEntity → map + เติม image จาก product ถ้า item.image == null */
+    private Map<String, Object> itemToMap(OrderItemEntity item) {
+        String image = item.getImage();
+        if (image == null || image.isBlank()) {
+            image = stockService.findImage(item.getProductId());
+        }
+        Map<String, Object> m = new HashMap<>();
+        m.put("id", item.getId());
+        m.put("productId", item.getProductId());
+        m.put("productName", item.getProductName());
+        m.put("price", item.getPrice());
+        m.put("quantity", item.getQuantity());
+        m.put("selectedOption", item.getSelectedOption());
+        m.put("image", image);
+        return m;
+    }
+
+    /** ดึง items ของ order เดียว (ใช้ใน endpoint รายตัว เช่น GET /{id}) */
     private List<Map<String, Object>> loadItems(Long orderId) {
-        List<OrderItemEntity> items = orderItemRepository.findByOrderId(orderId);
         List<Map<String, Object>> result = new ArrayList<>();
-        for (OrderItemEntity item : items) {
-            String image = item.getImage();
-            if (image == null || image.isBlank()) {
-                image = stockService.findImage(item.getProductId());
-            }
-            Map<String, Object> m = new HashMap<>();
-            m.put("id", item.getId());
-            m.put("productId", item.getProductId());
-            m.put("productName", item.getProductName());
-            m.put("price", item.getPrice());
-            m.put("quantity", item.getQuantity());
-            m.put("selectedOption", item.getSelectedOption());
-            m.put("image", image);
-            result.add(m);
+        for (OrderItemEntity item : orderItemRepository.findByOrderId(orderId)) {
+            result.add(itemToMap(item));
         }
         return result;
+    }
+
+    /**
+     * ✅ โหลด items ของหลาย order พร้อมกันในครั้งเดียว (กัน N+1)
+     * คืน map: orderId → list ของ item map
+     */
+    private Map<Long, List<Map<String, Object>>> loadItemsForOrders(List<Long> orderIds) {
+        Map<Long, List<Map<String, Object>>> byOrder = new HashMap<>();
+        if (orderIds.isEmpty())
+            return byOrder;
+        for (OrderItemEntity item : orderItemRepository.findByOrderIdIn(orderIds)) {
+            byOrder.computeIfAbsent(item.getOrderId(), k -> new ArrayList<>())
+                    .add(itemToMap(item));
+        }
+        return byOrder;
+    }
+
+    /** จำกัด page/size ให้ปลอดภัย (size สูงสุด 100 กันดึงทีละมหาศาล) */
+    private Pageable parsePageable(int page, int size) {
+        int p = Math.max(page, 0);
+        int s = size < 1 ? 20 : Math.min(size, 100);
+        return PageRequest.of(p, s);
+    }
+
+    /** ห่อ Page<OrderEntity> เป็น response envelope + batch-load items (กัน N+1) */
+    private Map<String, Object> pageEnvelope(Page<OrderEntity> orderPage) {
+        List<OrderEntity> orders = orderPage.getContent();
+        List<Long> ids = orders.stream().map(OrderEntity::getId).toList();
+        Map<Long, List<Map<String, Object>>> itemsByOrder = loadItemsForOrders(ids);
+
+        List<Map<String, Object>> content = new ArrayList<>();
+        for (OrderEntity o : orders) {
+            content.add(orderToMap(o, itemsByOrder.getOrDefault(o.getId(), new ArrayList<>())));
+        }
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("content", content);
+        body.put("page", orderPage.getNumber());
+        body.put("size", orderPage.getSize());
+        body.put("totalElements", orderPage.getTotalElements());
+        body.put("totalPages", orderPage.getTotalPages());
+        body.put("hasNext", orderPage.hasNext());
+        return body;
     }
 
     private Map<String, Object> orderToMap(OrderEntity o, List<Map<String, Object>> items) {

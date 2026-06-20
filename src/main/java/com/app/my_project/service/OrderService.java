@@ -9,6 +9,8 @@ import com.app.my_project.repository.OrderItemRepository;
 import com.app.my_project.repository.OrderRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -114,6 +116,19 @@ public class OrderService {
 
     public List<OrderEntity> getAll() {
         return orderRepository.findAllByOrderByCreatedAtDesc();
+    }
+
+    // ✅ Paginated accessors — สำหรับ list endpoints
+    public Page<OrderEntity> getByEmail(String email, Pageable pageable) {
+        return orderRepository.findByEmailOrderByCreatedAtDesc(email, pageable);
+    }
+
+    public Page<OrderEntity> getAll(Pageable pageable) {
+        return orderRepository.findAllByOrderByCreatedAtDesc(pageable);
+    }
+
+    public Page<OrderEntity> getDineInByEmail(String email, Pageable pageable) {
+        return orderRepository.findByEmailAndOrderTypeOrderByCreatedAtDesc(email, "dine-in", pageable);
     }
 
     /**

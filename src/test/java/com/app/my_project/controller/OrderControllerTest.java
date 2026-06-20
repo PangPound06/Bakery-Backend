@@ -4,6 +4,7 @@ import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
 import com.app.my_project.repository.AdminRepository;
 import com.app.my_project.repository.OrderItemRepository;
+import com.app.my_project.repository.UserRepository;
 import com.app.my_project.service.*;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -13,6 +14,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
+import org.springframework.data.domain.PageImpl;
 
 import java.util.*;
 
@@ -44,6 +46,8 @@ class OrderControllerTest {
     private JwtService jwtService;
     @Mock
     private AdminRepository adminRepository;
+    @Mock
+    private UserRepository userRepository;
 
     @InjectMocks
     private OrderController controller;
@@ -128,10 +132,11 @@ class OrderControllerTest {
         @Test
         @DisplayName("GET /user/{email} → return list")
         void getByEmail_returnsList() {
-            when(orderService.getByEmail("a@b.com")).thenReturn(List.of(makeOrder(1L)));
-            when(orderItemRepository.findByOrderId(1L)).thenReturn(List.of());
+            when(orderService.getByEmail(eq("a@b.com"), any()))
+                    .thenReturn(new PageImpl<>(List.of(makeOrder(1L))));
+            when(orderItemRepository.findByOrderIdIn(any())).thenReturn(List.of());
 
-            ResponseEntity<?> response = controller.getByEmail("a@b.com");
+            ResponseEntity<?> response = controller.getByEmail("a@b.com", 0, 20);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
         }
@@ -167,10 +172,10 @@ class OrderControllerTest {
         @DisplayName("✅ GET /all admin → 200")
         void getAll_admin_200() {
             mockAdmin();
-            when(orderService.getAll()).thenReturn(List.of(makeOrder(1L)));
-            when(orderItemRepository.findByOrderId(any())).thenReturn(List.of());
+            when(orderService.getAll(any())).thenReturn(new PageImpl<>(List.of(makeOrder(1L))));
+            when(orderItemRepository.findByOrderIdIn(any())).thenReturn(List.of());
 
-            ResponseEntity<?> response = controller.getAll(ADMIN_AUTH);
+            ResponseEntity<?> response = controller.getAll(ADMIN_AUTH, 0, 20);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
         }
@@ -180,10 +185,10 @@ class OrderControllerTest {
         void getAll_nonAdmin_403() {
             mockNotAdmin();
 
-            ResponseEntity<?> response = controller.getAll(USER_AUTH);
+            ResponseEntity<?> response = controller.getAll(USER_AUTH, 0, 20);
 
             assertThat(response.getStatusCode().value()).isEqualTo(403);
-            verify(orderService, never()).getAll();
+            verify(orderService, never()).getAll(any());
         }
 
         @Test
