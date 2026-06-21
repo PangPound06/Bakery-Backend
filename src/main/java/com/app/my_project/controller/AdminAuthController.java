@@ -27,6 +27,9 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import jakarta.persistence.criteria.Predicate;
+import java.util.ArrayList;
 
 /**
  * Admin authentication & management
@@ -223,7 +226,24 @@ public class AdminAuthController {
         String searchParam = (search == null || search.isBlank()) ? null : search.trim();
 
         Pageable pageable = PageRequest.of(p, s, Sort.by(Sort.Direction.ASC, "id"));
-        Page<AdminEntity> result = adminRepository.search(roleParam, searchParam, pageable);
+
+        // ✅ เติมเงื่อนไขเฉพาะตอนมีค่า (ไม่มีค่า = ไม่กรอง) — เลี่ยง null parameter บน PostgreSQL
+        Specification<AdminEntity> spec = (root, q, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (roleParam != null) {
+                predicates.add(cb.equal(
+                        cb.lower(cb.coalesce(root.<String>get("role"), "admin")),
+                        roleParam.toLowerCase()));
+            }
+            if (searchParam != null) {
+                String like = "%" + searchParam.toLowerCase() + "%";
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.<String>get("fullname")), like),
+                        cb.like(cb.lower(root.<String>get("email")), like)));
+            }
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+        Page<AdminEntity> result = adminRepository.findAll(spec, pageable);
 
         List<Map<String, Object>> content = result.getContent().stream()
                 .map(this::buildAdminData).toList();
