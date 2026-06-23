@@ -91,7 +91,8 @@ public class SecurityConfig {
         config.setAllowedOriginPatterns(List.of(
                 "http://localhost:*",
                 "https://poundbakery.vercel.app",
-                "https://*.vercel.app"));
+                "https://*.vercel.app",
+                "https://poundbakeryshop.com"));
 
         config.setAllowedMethods(List.of(
                 "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
