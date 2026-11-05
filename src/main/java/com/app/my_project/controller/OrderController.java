@@ -362,7 +362,7 @@ public class OrderController {
             case NOT_FOUND -> ResponseEntity.notFound().build();
             case NOT_TRANSFER -> ResponseEntity.badRequest()
                     .body(Map.of("error", "คำสั่งซื้อนี้ไม่ได้ชำระด้วยการโอนพร้อมเพย์"));
-            case WRONG_STATE, INVALID_SLIP -> ResponseEntity.status(409)
+            case WRONG_STATE, DUPLICATE_SLIP -> ResponseEntity.status(409)
                     .body(Map.of("error", "คำสั่งซื้อนี้ถูกยืนยัน ปฏิเสธ หรือหมดเวลาไปแล้ว"));
         };
     }

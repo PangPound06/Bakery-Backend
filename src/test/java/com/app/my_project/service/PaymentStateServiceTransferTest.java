@@ -32,6 +32,7 @@ class PaymentStateServiceTransferTest {
 
     private static final String EMAIL = "cus@test.com";
     private static final String SLIP = "https://res.cloudinary.com/demo/image/upload/slip.png";
+    private static final String REF = "slip:abc123";
 
     @Mock private OrderRepository orderRepository;
     @Mock private OrderItemRepository orderItemRepository;
@@ -56,29 +57,44 @@ class PaymentStateServiceTransferTest {
 
     // ═════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("submitTransfer — ลูกค้ากดแจ้งโอนแล้ว")
+    @DisplayName("submitTransfer — ลูกค้ากดแจ้งโอนพร้อมสลิป")
     class Submit {
 
         @Test
-        @DisplayName("รอโอน → รอตรวจสอบ + เก็บสลิป + ล้างตะกร้า (ยังไม่ใช่ paid)")
+        @DisplayName("รอโอน → รอตรวจสอบ + เก็บสลิปและ reference + ล้างตะกร้า (ยังไม่ใช่ paid)")
         void awaiting_becomesVerifying() {
             OrderEntity order = transferOrder(PaymentStateService.AWAITING);
 
-            assertThat(service.submitTransfer(1L, EMAIL, SLIP)).isEqualTo(PaymentStateService.TransferResult.OK);
+            assertThat(service.submitTransfer(1L, EMAIL, SLIP, REF)).isEqualTo(PaymentStateService.TransferResult.OK);
 
             assertThat(order.getPaymentStatus()).isEqualTo(PaymentStateService.VERIFYING);
             assertThat(order.getSlipImage()).isEqualTo(SLIP);
+            assertThat(order.getPaymentId()).isEqualTo(REF);
             verify(orderRepository).save(order);
             verify(jdbcTemplate).update("DELETE FROM tb_cart WHERE email = ?", EMAIL);
         }
 
         @Test
-        @DisplayName("ไม่แนบสลิปก็แจ้งได้")
-        void withoutSlip_ok() {
-            OrderEntity order = transferOrder(PaymentStateService.AWAITING);
+        @DisplayName("ส่งสลิปใหม่ระหว่างรอตรวจได้")
+        void verifying_canResubmit() {
+            OrderEntity order = transferOrder(PaymentStateService.VERIFYING);
 
-            assertThat(service.submitTransfer(1L, EMAIL, null)).isEqualTo(PaymentStateService.TransferResult.OK);
-            assertThat(order.getSlipImage()).isNull();
+            assertThat(service.submitTransfer(1L, EMAIL, SLIP, REF)).isEqualTo(PaymentStateService.TransferResult.OK);
+            assertThat(order.getSlipImage()).isEqualTo(SLIP);
+        }
+
+        @Test
+        @DisplayName("สลิปใบเดียวกันถูกใช้กับ order อื่นแล้ว → DUPLICATE_SLIP")
+        void duplicateSlip_rejected() {
+            OrderEntity order = transferOrder(PaymentStateService.AWAITING);
+            when(orderRepository.existsByPaymentIdAndIdNot(REF, 1L)).thenReturn(true);
+
+            assertThat(service.checkSubmittable(1L, EMAIL, REF))
+                    .isEqualTo(PaymentStateService.TransferResult.DUPLICATE_SLIP);
+            assertThat(service.submitTransfer(1L, EMAIL, SLIP, REF))
+                    .isEqualTo(PaymentStateService.TransferResult.DUPLICATE_SLIP);
+            assertThat(order.getPaymentStatus()).isEqualTo(PaymentStateService.AWAITING);
+            verify(orderRepository, never()).save(any());
         }
 
         @Test
@@ -86,19 +102,8 @@ class PaymentStateServiceTransferTest {
         void otherCustomer_notFound() {
             transferOrder(PaymentStateService.AWAITING);
 
-            assertThat(service.submitTransfer(1L, "other@test.com", SLIP))
+            assertThat(service.submitTransfer(1L, "other@test.com", SLIP, REF))
                     .isEqualTo(PaymentStateService.TransferResult.NOT_FOUND);
-            verify(orderRepository, never()).save(any());
-        }
-
-        @Test
-        @DisplayName("ลิงก์สลิปจากเว็บอื่น → INVALID_SLIP")
-        void foreignSlip_rejected() {
-            OrderEntity order = transferOrder(PaymentStateService.AWAITING);
-
-            assertThat(service.submitTransfer(1L, EMAIL, "https://evil.example/slip.png"))
-                    .isEqualTo(PaymentStateService.TransferResult.INVALID_SLIP);
-            assertThat(order.getPaymentStatus()).isEqualTo(PaymentStateService.AWAITING);
             verify(orderRepository, never()).save(any());
         }
 
@@ -106,12 +111,12 @@ class PaymentStateServiceTransferTest {
         @DisplayName("หมดเวลาไปแล้ว / จ่ายผ่าน Stripe → แจ้งโอนไม่ได้")
         void wrongStateOrMethod() {
             OrderEntity order = transferOrder(PaymentStateService.EXPIRED);
-            assertThat(service.submitTransfer(1L, EMAIL, null))
+            assertThat(service.submitTransfer(1L, EMAIL, SLIP, REF))
                     .isEqualTo(PaymentStateService.TransferResult.WRONG_STATE);
 
             order.setPaymentStatus(PaymentStateService.AWAITING);
             order.setPaymentMethod(PaymentMethods.QR_PROMPTPAY);
-            assertThat(service.submitTransfer(1L, EMAIL, null))
+            assertThat(service.submitTransfer(1L, EMAIL, SLIP, REF))
                     .isEqualTo(PaymentStateService.TransferResult.NOT_TRANSFER);
             verify(orderRepository, never()).save(any());
         }

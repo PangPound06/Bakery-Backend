@@ -1,6 +1,8 @@
 package com.app.my_project.controller;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.app.my_project.service.ImageStorageService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -8,106 +10,68 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
-import com.cloudinary.Cloudinary;
-import com.cloudinary.utils.ObjectUtils;
-
-import java.util.UUID;
-
+/**
+ * อัปโหลด/ลบรูปสินค้า (ต้อง login / ลบได้เฉพาะแอดมิน — กำหนดใน SecurityConfig)
+ *
+ * สลิปโอนเงินไม่ผ่านที่นี่ — ต้องตรวจ QR ก่อนเก็บ ดู CheckoutController.submitTransfer
+ */
 @RestController
 @RequestMapping("/api/upload/image")
 public class UploadFileController {
 
-    @Value("${cloudinary.cloud-name}")
-    private String cloudName;
+    private static final Logger log = LoggerFactory.getLogger(UploadFileController.class);
+    private static final long MAX_BYTES = 5L * 1024 * 1024;
+    private static final Set<String> ALLOWED_TYPES = Set.of("image/jpeg", "image/png", "image/gif", "image/webp");
 
-    @Value("${cloudinary.api-key}")
-    private String apiKey;
+    private final ImageStorageService imageStorage;
 
-    @Value("${cloudinary.api-secret}")
-    private String apiSecret;
-
-    private Cloudinary getCloudinary() {
-        return new Cloudinary(ObjectUtils.asMap(
-                "cloud_name", cloudName,
-                "api_key", apiKey,
-                "api_secret", apiSecret));
+    public UploadFileController(ImageStorageService imageStorage) {
+        this.imageStorage = imageStorage;
     }
 
     @PostMapping
     public ResponseEntity<?> uploadImage(@RequestParam("file") MultipartFile file) {
-        Map<String, Object> response = new HashMap<>();
+        if (file.isEmpty())
+            return badRequest("กรุณาเลือกไฟล์");
+        if (file.getContentType() == null || !ALLOWED_TYPES.contains(file.getContentType()))
+            return badRequest("รองรับเฉพาะไฟล์รูปภาพ (JPG, PNG, GIF, WEBP)");
+        if (file.getSize() > MAX_BYTES)
+            return badRequest("ขนาดไฟล์ต้องไม่เกิน 5MB");
 
         try {
-            if (file.isEmpty()) {
-                response.put("success", false);
-                response.put("message", "กรุณาเลือกไฟล์");
-                return ResponseEntity.badRequest().body(response);
-            }
+            ImageStorageService.StoredImage stored =
+                    imageStorage.upload(file.getBytes(), ImageStorageService.FOLDER_PRODUCTS);
 
-            String contentType = file.getContentType();
-            if (contentType == null || !isAllowedImageType(contentType)) {
-                response.put("success", false);
-                response.put("message", "รองรับเฉพาะไฟล์รูปภาพ (JPG, PNG, GIF, WEBP)");
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            if (file.getSize() > 5 * 1024 * 1024) {
-                response.put("success", false);
-                response.put("message", "ขนาดไฟล์ต้องไม่เกิน 5MB");
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            byte[] bytes = file.getBytes();
-
-            String uniqueFilename = UUID.randomUUID().toString(); // ← ชื่อไฟล์ใหม่ไม่มีภาษาไทย
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> uploadResult = (Map<String, Object>) getCloudinary().uploader().upload(
-                    bytes,
-                    ObjectUtils.asMap(
-                            "folder", "bakery",
-                            "public_id", uniqueFilename));
-
-            String imageUrl = (String) uploadResult.get("secure_url");
-            String publicId = (String) uploadResult.get("public_id");
-
+            Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "อัพโหลดสำเร็จ");
-            response.put("url", imageUrl);
-            response.put("filename", publicId);
+            response.put("url", stored.url());
+            response.put("filename", stored.publicId());
             response.put("originalFilename", file.getOriginalFilename());
             response.put("size", file.getSize());
-
             return ResponseEntity.ok(response);
-
         } catch (IOException e) {
-            response.put("success", false);
-            response.put("message", "เกิดข้อผิดพลาดในการอัพโหลด: " + e.getMessage());
-            return ResponseEntity.internalServerError().body(response);
+            log.error("อัปโหลดรูปไม่สำเร็จ", e);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("success", false, "message", "เกิดข้อผิดพลาดในการอัพโหลด"));
         }
     }
 
     @DeleteMapping("/{publicId}")
     public ResponseEntity<?> deleteImage(@PathVariable String publicId) {
-        Map<String, Object> response = new HashMap<>();
-
         try {
-            getCloudinary().uploader().destroy(publicId, ObjectUtils.emptyMap());
-            response.put("success", true);
-            response.put("message", "ลบไฟล์สำเร็จ");
-            return ResponseEntity.ok(response);
+            imageStorage.delete(publicId);
+            return ResponseEntity.ok(Map.of("success", true, "message", "ลบไฟล์สำเร็จ"));
         } catch (IOException e) {
-            response.put("success", false);
-            response.put("message", "เกิดข้อผิดพลาด: " + e.getMessage());
-            return ResponseEntity.internalServerError().body(response);
+            log.error("ลบรูป {} ไม่สำเร็จ", publicId, e);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("success", false, "message", "เกิดข้อผิดพลาดในการลบไฟล์"));
         }
     }
 
-    private boolean isAllowedImageType(String contentType) {
-        return contentType.equals("image/jpeg") ||
-                contentType.equals("image/png") ||
-                contentType.equals("image/gif") ||
-                contentType.equals("image/webp");
+    private static ResponseEntity<?> badRequest(String message) {
+        return ResponseEntity.badRequest().body(Map.of("success", false, "message", message));
     }
 }

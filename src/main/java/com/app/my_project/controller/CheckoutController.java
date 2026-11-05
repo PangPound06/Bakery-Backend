@@ -10,8 +10,10 @@ import com.google.zxing.WriterException;
 import com.stripe.exception.StripeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -87,6 +89,7 @@ public class CheckoutController {
     private final StoreSettingService storeSettingService;
     private final PaymentReconciler paymentReconciler;
     private final QRCodeService qrCodeService;
+    private final TransferSlipService transferSlipService;
 
     public CheckoutController(CurrentUser currentUser,
             OrderRepository orderRepository,
@@ -96,7 +99,8 @@ public class CheckoutController {
             StripeService stripeService,
             StoreSettingService storeSettingService,
             PaymentReconciler paymentReconciler,
-            QRCodeService qrCodeService) {
+            QRCodeService qrCodeService,
+            TransferSlipService transferSlipService) {
         this.currentUser = currentUser;
         this.orderRepository = orderRepository;
         this.orderService = orderService;
@@ -106,6 +110,7 @@ public class CheckoutController {
         this.storeSettingService = storeSettingService;
         this.paymentReconciler = paymentReconciler;
         this.qrCodeService = qrCodeService;
+        this.transferSlipService = transferSlipService;
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -255,23 +260,31 @@ public class CheckoutController {
     // TRANSFER SUBMITTED — ลูกค้ากด "แจ้งโอนแล้ว"
     // ═════════════════════════════════════════════════════════════════
 
-    @PostMapping("/transfer/{orderId}/submit")
+    /** multipart: slip = รูปสลิป (JPG/PNG) — บังคับ และต้องมี QR ของธนาคาร */
+    @PostMapping(value = "/transfer/{orderId}/submit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> submitTransfer(@PathVariable Long orderId,
-            @RequestBody(required = false) Map<String, Object> body,
-            @RequestHeader(value = "Authorization", required = false) String auth) {
+            @RequestParam(value = "slip", required = false) MultipartFile slip,
+            @RequestHeader(value = "Authorization", required = false) String auth) throws IOException {
         String email = resolveEmail(auth);
         if (email == null)
             return unauthorized();
+        if (slip == null || slip.isEmpty())
+            return badRequest("กรุณาแนบรูปสลิปการโอนเงิน");
 
-        String slipUrl = body == null ? null : str(body.get("slipUrl"));
-        return switch (paymentStateService.submitTransfer(orderId, email, slipUrl)) {
+        return switch (transferSlipService.submit(orderId, email, slip.getBytes(), slip.getContentType())) {
             case OK -> ResponseEntity.ok(Map.of("success", true,
                     "paymentStatus", PaymentStateService.VERIFYING));
             case NOT_FOUND -> notFound();
             case NOT_TRANSFER -> badRequest("คำสั่งซื้อนี้ไม่ได้ชำระด้วยการโอนพร้อมเพย์");
             case WRONG_STATE -> ResponseEntity.status(409).body(Map.of("success", false,
                     "error", "คำสั่งซื้อนี้หมดเวลาหรือถูกตรวจสอบไปแล้ว กรุณาตรวจสอบที่หน้าคำสั่งซื้อของฉัน"));
-            case INVALID_SLIP -> badRequest("รูปสลิปไม่ถูกต้อง กรุณาอัปโหลดใหม่");
+            case DUPLICATE_SLIP -> ResponseEntity.status(409).body(Map.of("success", false,
+                    "error", "สลิปนี้ถูกใช้กับคำสั่งซื้ออื่นแล้ว กรุณาแนบสลิปของรายการนี้"));
+            case INVALID_FILE -> badRequest("รองรับเฉพาะรูป JPG หรือ PNG ขนาดไม่เกิน 5MB");
+            case NO_QR -> badRequest("ไม่พบ QR Code ในรูป กรุณาแนบสลิปจากแอปธนาคารที่เห็น QR ชัดเจน");
+            case PAYMENT_QR -> badRequest("รูปนี้เป็น QR สำหรับจ่ายเงิน ไม่ใช่สลิป กรุณาแนบสลิปหลังโอนแล้ว");
+            case STORAGE_FAILED -> ResponseEntity.status(503).body(Map.of("success", false,
+                    "error", "บันทึกสลิปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"));
         };
     }
 

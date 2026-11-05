@@ -1,5 +1,7 @@
 package com.app.my_project.controller;
 
+import com.app.my_project.service.ImageStorageService;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -9,6 +11,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * Test UploadFileController — ทดสอบ branch การ validate ไฟล์ (ก่อนเรียก Cloudinary)
@@ -20,7 +23,7 @@ class UploadFileControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new UploadFileController();
+        controller = new UploadFileController(mock(ImageStorageService.class));
     }
 
     @SuppressWarnings("unchecked")

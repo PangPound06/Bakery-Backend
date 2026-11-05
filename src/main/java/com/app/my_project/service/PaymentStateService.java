@@ -58,12 +58,6 @@ public class PaymentStateService {
     /** เวลาที่ลูกค้ามีให้โอนพร้อมเพย์แล้วกดแจ้งโอน ก่อน order ถูกปิดและคืน stock */
     public static final Duration TRANSFER_PAY_WINDOW = Duration.ofMinutes(30);
 
-    /**
-     * สลิปต้องเป็นรูปที่อัปผ่าน /api/upload/image ของเราเท่านั้น
-     * กันลูกค้าใส่ลิงก์ภายนอกที่แอดมินจะเผลอกดเปิด
-     */
-    private static final String SLIP_URL_PREFIX = "https://res.cloudinary.com/";
-
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final StockService stockService;
@@ -147,41 +141,57 @@ public class PaymentStateService {
         NOT_TRANSFER,
         /** สถานะไม่อยู่ในขั้นที่ทำรายการนี้ได้ (เช่น หมดเวลา/ยืนยันไปแล้ว) */
         WRONG_STATE,
-        /** ลิงก์สลิปไม่ได้มาจากระบบอัปโหลดของเรา */
-        INVALID_SLIP
+        /** สลิปใบนี้ (QR เดียวกัน) ถูกแนบกับคำสั่งซื้ออื่นไปแล้ว */
+        DUPLICATE_SLIP
     }
 
     /**
-     * ลูกค้ากด "แจ้งโอนแล้ว" → รอแอดมินตรวจยอด
+     * ตรวจก่อนเก็บรูปสลิป — order ของลูกค้าคนนี้ ยังรอโอน และสลิปไม่เคยถูกใช้กับ order อื่น
+     *
+     * เรียกก่อนอัปโหลดรูปขึ้น Cloudinary จะได้ไม่เก็บรูปของคำขอที่ยังไงก็ไม่ผ่าน
+     * submitTransfer ตรวจซ้ำอีกรอบเสมอ (สถานะอาจเปลี่ยนระหว่างอัปโหลด)
+     */
+    public TransferResult checkSubmittable(Long orderId, String email, String slipReference) {
+        return validateSubmission(orderId, email, slipReference);
+    }
+
+    /**
+     * ลูกค้ากด "แจ้งโอนแล้ว" พร้อมสลิป → รอแอดมินตรวจยอด
      *
      * ยังไม่ใช่ paid — แค่หยุดนับเวลาหมดอายุ และล้างตะกร้าเพราะลูกค้าถือว่าสั่งซื้อเสร็จแล้ว
-     * กดซ้ำได้ (เช่น อัปสลิปใหม่) ตราบใดที่แอดมินยังไม่ตัดสิน
+     * ส่งสลิปใหม่ได้ (เช่น แนบผิดรูป) ตราบใดที่แอดมินยังไม่ตัดสิน
      *
-     * @param slipUrl รูปสลิปที่อัปผ่าน /api/upload/image — ไม่บังคับ
+     * @param slipUrl       รูปสลิปที่ตรวจ QR แล้วและเก็บบน Cloudinary
+     * @param slipReference ค่าแทนสลิปจาก SlipQrReader — เก็บใน payment_id ไว้กันสลิปซ้ำ
      */
     @Transactional
-    public TransferResult submitTransfer(Long orderId, String email, String slipUrl) {
-        Optional<OrderEntity> opt = orderRepository.findById(orderId)
-                .filter(o -> o.getEmail().equals(email));
-        if (opt.isEmpty())
-            return TransferResult.NOT_FOUND;
-        OrderEntity order = opt.get();
-        TransferResult check = checkDecidable(order);
+    public TransferResult submitTransfer(Long orderId, String email, String slipUrl, String slipReference) {
+        TransferResult check = validateSubmission(orderId, email, slipReference);
         if (check != TransferResult.OK)
             return check;
 
-        boolean hasSlip = slipUrl != null && !slipUrl.isBlank();
-        if (hasSlip && !slipUrl.startsWith(SLIP_URL_PREFIX))
-            return TransferResult.INVALID_SLIP;
-
+        // อยู่ใน transaction เดียวกัน — Hibernate คืน entity เดิมจาก cache ไม่ query ซ้ำ
+        OrderEntity order = orderRepository.findById(orderId).orElseThrow();
         order.setPaymentStatus(VERIFYING);
-        if (hasSlip) {
-            order.setSlipImage(slipUrl);
-        }
+        order.setSlipImage(slipUrl);
+        order.setPaymentId(slipReference);
         orderRepository.save(order);
         clearCart(email);
 
-        log.info("🧾 order {} ({}) ลูกค้าแจ้งโอนแล้ว รอตรวจสอบ (สลิป={})", orderId, order.getOrdCode(), hasSlip);
+        log.info("🧾 order {} ({}) ลูกค้าแจ้งโอนพร้อมสลิปแล้ว รอตรวจสอบ", orderId, order.getOrdCode());
+        return TransferResult.OK;
+    }
+
+    private TransferResult validateSubmission(Long orderId, String email, String slipReference) {
+        Optional<OrderEntity> owned = orderRepository.findById(orderId).filter(o -> o.getEmail().equals(email));
+        if (owned.isEmpty())
+            return TransferResult.NOT_FOUND;
+        OrderEntity order = owned.get();
+        TransferResult check = checkDecidable(order);
+        if (check != TransferResult.OK)
+            return check;
+        if (orderRepository.existsByPaymentIdAndIdNot(slipReference, order.getId()))
+            return TransferResult.DUPLICATE_SLIP;
         return TransferResult.OK;
     }
 

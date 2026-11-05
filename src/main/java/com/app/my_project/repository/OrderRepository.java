@@ -36,5 +36,8 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long>, JpaSp
     List<OrderEntity> findByPaymentMethodAndPaymentStatusAndCreatedAtBefore(
             String paymentMethod, String paymentStatus, LocalDateTime createdBefore);
 
+    /** สลิป (payment_id) นี้ถูกใช้กับ order อื่นแล้วหรือยัง */
+    boolean existsByPaymentIdAndIdNot(String paymentId, Long id);
+
     void deleteByEmail(String email);
 }
