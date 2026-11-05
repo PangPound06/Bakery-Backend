@@ -169,6 +169,8 @@ public class CheckoutController {
             resp.put("orderId", order.getId());
             resp.put("ordCode", order.getOrdCode());
             resp.put("total", cart.total());
+            // คีย์ sk_test (Stripe sandbox) → หน้าเว็บแสดงลิงก์จำลองการจ่ายเงิน เพราะแอปธนาคารสแกน QR ทดสอบไม่ได้
+            resp.put("testMode", stripeService.isTestMode());
 
             if (StripeService.METHOD_PROMPTPAY.equals(method)) {
                 StripeService.PromptPayQr qr = stripeService.createPromptPayIntent(order, cart, email);
