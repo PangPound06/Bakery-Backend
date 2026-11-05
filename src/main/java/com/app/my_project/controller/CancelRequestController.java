@@ -1,9 +1,7 @@
 package com.app.my_project.controller;
 
-import com.app.my_project.entity.UserEntity;
-import com.app.my_project.repository.UserRepository;
+import com.app.my_project.common.CurrentUser;
 import com.app.my_project.service.CancelRequestService;
-import com.app.my_project.service.JwtService;
 import com.app.my_project.service.RefundService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +12,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * CancelRequestController
@@ -40,15 +39,11 @@ public class CancelRequestController {
     private static final Logger log = LoggerFactory.getLogger(CancelRequestController.class);
 
     private final CancelRequestService cancelRequestService;
-    private final JwtService jwtService;
-    private final UserRepository userRepository;
+    private final CurrentUser currentUser;
 
-    public CancelRequestController(CancelRequestService cancelRequestService,
-            JwtService jwtService,
-            UserRepository userRepository) {
+    public CancelRequestController(CancelRequestService cancelRequestService, CurrentUser currentUser) {
         this.cancelRequestService = cancelRequestService;
-        this.jwtService = jwtService;
-        this.userRepository = userRepository;
+        this.currentUser = currentUser;
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -129,7 +124,7 @@ public class CancelRequestController {
     @GetMapping("/admin/cancel-requests")
     public ResponseEntity<?> list(@RequestParam(required = false) String status,
             @RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!jwtService.isAdmin(auth))
+        if (!currentUser.isAdmin(auth))
             return forbidden();
         return ResponseEntity.ok(Map.of(
                 "success", true,
@@ -139,7 +134,7 @@ public class CancelRequestController {
     @GetMapping("/admin/cancel-requests/{id}/items")
     public ResponseEntity<?> items(@PathVariable Long id,
             @RequestHeader(value = "Authorization", required = false) String auth) {
-        if (!jwtService.isAdmin(auth))
+        if (!currentUser.isAdmin(auth))
             return forbidden();
         return ResponseEntity.ok(Map.of(
                 "success", true,
@@ -158,10 +153,11 @@ public class CancelRequestController {
             @RequestBody(required = false) Map<String, Object> body,
             @RequestHeader(value = "Authorization", required = false) String auth) {
 
-        if (!jwtService.isAdmin(auth))
+        Optional<String> admin = currentUser.adminEmail(auth);
+        if (admin.isEmpty())
             return forbidden();
 
-        String adminEmail = resolveEmail(auth);
+        String adminEmail = admin.get();
         Map<String, Object> b = body == null ? Map.of() : body;
 
         try {
@@ -170,7 +166,7 @@ public class CancelRequestController {
                     str(b.get("mode")),
                     asDouble(b.get("amount")),
                     str(b.get("note")),
-                    adminEmail == null ? "admin" : adminEmail);
+                    adminEmail);
 
             return ResponseEntity.ok(Map.of(
                     "success", true,
@@ -178,7 +174,8 @@ public class CancelRequestController {
                     "orderId", r.orderId(),
                     "refundAmount", r.refundAmount(),
                     "feeDeducted", r.feeDeducted(),
-                    "message", String.format("คืนเงิน %.2f บาท เรียบร้อย", r.refundAmount())));
+                    "manualPayout", r.manualPayout(),
+                    "message", refundMessage("คืนเงิน", r)));
 
         } catch (CancelRequestService.CancelException | RefundService.RefundException e) {
             return bad(e.getMessage());
@@ -201,10 +198,11 @@ public class CancelRequestController {
             @RequestBody(required = false) Map<String, Object> body,
             @RequestHeader(value = "Authorization", required = false) String auth) {
 
-        if (!jwtService.isAdmin(auth))
+        Optional<String> admin = currentUser.adminEmail(auth);
+        if (admin.isEmpty())
             return forbidden();
 
-        String adminEmail = resolveEmail(auth);
+        String adminEmail = admin.get();
         Map<String, Object> b = body == null ? Map.of() : body;
 
         try {
@@ -223,7 +221,8 @@ public class CancelRequestController {
                     "orderId", r.orderId(),
                     "refundAmount", r.refundAmount(),
                     "feeDeducted", r.feeDeducted(),
-                    "message", String.format("ยกเลิกและคืนเงิน %.2f บาทเรียบร้อย", r.refundAmount())));
+                    "manualPayout", r.manualPayout(),
+                    "message", refundMessage("ยกเลิกและคืนเงิน", r)));
 
         } catch (CancelRequestService.CancelException | RefundService.RefundException e) {
             return bad(e.getMessage());
@@ -238,15 +237,16 @@ public class CancelRequestController {
             @RequestBody(required = false) Map<String, Object> body,
             @RequestHeader(value = "Authorization", required = false) String auth) {
 
-        if (!jwtService.isAdmin(auth))
+        Optional<String> admin = currentUser.adminEmail(auth);
+        if (admin.isEmpty())
             return forbidden();
 
-        String adminEmail = resolveEmail(auth);
+        String adminEmail = admin.get();
         Map<String, Object> b = body == null ? Map.of() : body;
 
         try {
             CancelRequestService.Result r = cancelRequestService.reject(
-                    id, str(b.get("note")), adminEmail == null ? "admin" : adminEmail);
+                    id, str(b.get("note")), adminEmail);
             return ResponseEntity.ok(Map.of(
                     "success", true,
                     "requestId", r.requestId(),
@@ -265,11 +265,17 @@ public class CancelRequestController {
     // HELPERS
     // ═════════════════════════════════════════════════════════════════
 
+    /** email ของลูกค้าที่ login — ยื่น/ดูคำขอได้เฉพาะของตัวเอง */
     private String resolveEmail(String authHeader) {
-        Long userId = jwtService.getUserIdFromHeader(authHeader);
-        if (userId == null)
-            return null;
-        return userRepository.findById(userId).map(UserEntity::getEmail).orElse(null);
+        return currentUser.customerEmail(authHeader).orElse(null);
+    }
+
+    /** order ที่โอนพร้อมเพย์เข้าบัญชีร้านตรง ระบบโอนคืนให้ไม่ได้ — ต้องบอกแอดมินให้โอนเอง */
+    private static String refundMessage(String action, CancelRequestService.Result r) {
+        String done = String.format("%s %.2f บาทเรียบร้อย", action, r.refundAmount());
+        return r.manualPayout()
+                ? done + " — กรุณาโอนคืนลูกค้าเองผ่านแอปธนาคาร (คำสั่งซื้อนี้ชำระด้วยการโอนพร้อมเพย์)"
+                : done;
     }
 
     @SuppressWarnings("unchecked")

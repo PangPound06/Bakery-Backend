@@ -3,6 +3,7 @@ package com.app.my_project;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -24,19 +25,36 @@ import java.util.List;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    /** ทุก method ต้องเป็นแอดมิน */
+    private static final String[] ADMIN_ONLY = {
+            "/api/admin/**",
+            "/api/orders/admin/**",
+            "/api/dinein/admin/**",
+            "/api/reservations/admin/**",
+            "/api/suppliers/**",
+            "/api/purchase-orders/**",
+            "/api/payment/**",
+    };
+
+    /** ลูกค้าอ่านได้ แต่สร้าง/แก้/ลบได้เฉพาะแอดมิน */
+    private static final String[] ADMIN_WRITES = {
+            "/api/products/**",
+            "/api/categories/**",
+            "/api/store/branches/**",
+    };
+
+    private final String jwtSecret;
+    private final UserRepository userRepository;
+    private final AdminRepository adminRepository;
+
     public SecurityConfig(
+            @Value("${jwt.secret}") String jwtSecret,
             UserRepository userRepository,
             AdminRepository adminRepository) {
+        this.jwtSecret = jwtSecret;
         this.userRepository = userRepository;
         this.adminRepository = adminRepository;
     }
-
-    @Value("${jwt.secret}")
-    private String jwtSecret;
-
-    private final UserRepository userRepository;
-
-    private final AdminRepository adminRepository;
 
     @Bean
     public BCryptPasswordEncoder passwordEncoder() {
@@ -57,13 +75,24 @@ public class SecurityConfig {
                         UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         // ✅ สำคัญ: OPTIONS request ต้อง permit (CORS preflight)
-                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         // ✅ Stripe webhook — ไม่มี JWT (Stripe ยิงมาเอง)
                         // ความปลอดภัยมาจากการ verify signature ใน controller
                         // ไม่ใช่จาก Spring Security
                         .requestMatchers("/api/stripe/webhook").permitAll()
-                        .requestMatchers("/api/**").permitAll()
-                        .requestMatchers("/uploads/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/admin/login").permitAll()
+                        // ═══ หลังบ้าน — ด่านแรกที่นี่ที่เดียว ═══
+                        // controller บางตัวเช็คสิทธิ์ซ้ำอีกชั้น บางตัวไม่ได้เช็คเลย
+                        // กฎตรงนี้กันไว้ทั้งหมด ลืมเช็คใน controller ใหม่ก็ไม่หลุด
+                        .requestMatchers(ADMIN_ONLY).hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, ADMIN_WRITES).hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, ADMIN_WRITES).hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PATCH, ADMIN_WRITES).hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, ADMIN_WRITES).hasRole("ADMIN")
+                        // อัปรูปเข้า Cloudinary ของร้าน — ต้อง login (แอดมินอัปรูปสินค้า / ลูกค้าอัปสลิป)
+                        // แต่ลบรูปได้เฉพาะแอดมิน ไม่งั้นลูกค้าลบรูปสินค้าได้
+                        .requestMatchers(HttpMethod.DELETE, "/api/upload/**").hasRole("ADMIN")
+                        .requestMatchers("/api/upload/**").authenticated()
                         .anyRequest().permitAll());
         return http.build();
     }

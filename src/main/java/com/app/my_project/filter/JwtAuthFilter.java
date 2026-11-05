@@ -110,15 +110,18 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
 
         // Path B: token เก่า ไม่มี role claim → fallback ตรวจจาก DB
+        // tb_admin กับ tb_users มี id ซ้ำกันได้ ถ้าเจอทั้งสองตารางจะบอกไม่ได้ว่าเป็นใคร
+        // ห้ามเดาเป็นแอดมิน — ไม่งั้น token ลูกค้าเก่าที่ id บังเอิญตรงกับแอดมินจะได้สิทธิ์หลังบ้าน
         Optional<AdminEntity> admin = adminRepository.findById(userId);
+        Optional<UserEntity> user = userRepository.findById(userId);
+        if (admin.isPresent() && user.isPresent()) {
+            log.warn("token ไม่มี role และ id {} มีทั้งแอดมินและลูกค้า — ให้ login ใหม่", userId);
+            return null;
+        }
         if (admin.isPresent()) {
             return new AuthInfo(admin.get().getEmail(), "ROLE_ADMIN");
         }
-        Optional<UserEntity> user = userRepository.findById(userId);
-        if (user.isPresent()) {
-            return new AuthInfo(user.get().getEmail(), "ROLE_USER");
-        }
-        return null;
+        return user.map(u -> new AuthInfo(u.getEmail(), "ROLE_USER")).orElse(null);
     }
 
     private record AuthInfo(String email, String authority) {

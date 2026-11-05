@@ -1,5 +1,6 @@
 package com.app.my_project.service;
 
+import com.app.my_project.common.PaymentMethods;
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
 import com.app.my_project.repository.OrderItemRepository;
@@ -10,6 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -21,12 +23,16 @@ import java.util.Set;
  * PaymentStateService — เปลี่ยนสถานะการจ่ายเงินของ order
  *
  * ═══ กฎเหล็ก ═══
- * มีที่เดียวที่ตั้ง paymentStatus = "paid" ได้ คือ webhook ของ Stripe
- * การที่ frontend เห็นว่า confirmPayment() สำเร็จ *ห้าม* ใช้ยืนยันการจ่ายเงิน
- * เพราะ JavaScript ถูกแก้ได้จากฝั่งลูกค้า
+ * paymentStatus = "paid" ตั้งได้สองทางเท่านั้น
+ *  - Stripe ยืนยัน (webhook หรือ PaymentReconciler ถาม Stripe เอง)
+ *  - แอดมินกดยืนยันยอดโอนพร้อมเพย์ที่เห็นในแอปธนาคารของร้าน (confirmTransfer)
+ * การที่ frontend เห็นว่า confirmPayment() สำเร็จ หรือลูกค้ากด "แจ้งโอนแล้ว" *ห้าม* ใช้ยืนยันการจ่ายเงิน
+ * เพราะทั้งสองอย่างมาจากฝั่งลูกค้า
  *
  * ═══ สถานะที่ใช้ ═══
- * awaiting_payment → paid | failed | expired
+ * Stripe: awaiting_payment → paid | failed | expired
+ * โอนพร้อมเพย์: awaiting_payment → awaiting_verification (ลูกค้าแจ้งโอน) → paid | failed
+ *               awaiting_payment → expired (ไม่แจ้งโอนภายในเวลา)
  */
 @Service
 public class PaymentStateService {
@@ -37,6 +43,8 @@ public class PaymentStateService {
     public static final String PAID = "paid";
     public static final String FAILED = "failed";
     public static final String EXPIRED = "expired";
+    /** ลูกค้าแจ้งว่าโอนพร้อมเพย์แล้ว รอแอดมินตรวจยอดในแอปธนาคาร */
+    public static final String VERIFYING = "awaiting_verification";
 
     /**
      * แถวที่ยังไม่จ่ายจะถูกเขียนทับได้เฉพาะที่สร้างไว้ไม่เกินกี่นาที
@@ -46,6 +54,15 @@ public class PaymentStateService {
      * แล้วเลข order จะเดินถอยหลัง ไล่ดูตามลำดับเวลาไม่ได้
      */
     private static final int REUSE_WINDOW_MINUTES = 30;
+
+    /** เวลาที่ลูกค้ามีให้โอนพร้อมเพย์แล้วกดแจ้งโอน ก่อน order ถูกปิดและคืน stock */
+    public static final Duration TRANSFER_PAY_WINDOW = Duration.ofMinutes(30);
+
+    /**
+     * สลิปต้องเป็นรูปที่อัปผ่าน /api/upload/image ของเราเท่านั้น
+     * กันลูกค้าใส่ลิงก์ภายนอกที่แอดมินจะเผลอกดเปิด
+     */
+    private static final String SLIP_URL_PREFIX = "https://res.cloudinary.com/";
 
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
@@ -109,18 +126,129 @@ public class PaymentStateService {
             return;
         }
 
-        order.setPaymentStatus(PAID);
         order.setPaymentId(paymentIntentId);
         order.setStripePaymentIntentId(paymentIntentId);
         // ถ้า order เคยถูกยกเลิกเพราะหมดเวลา แล้วเงินเข้าทีหลัง → ปลุกกลับมา
         if ("cancelled".equals(order.getOrderStatus())) {
             order.setOrderStatus("pending");
         }
+        finalizePaid(order);
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    // PROMPTPAY TRANSFER — โอนเข้าบัญชีร้านตรง แอดมินเป็นคนยืนยัน
+    // ═════════════════════════════════════════════════════════════════
+
+    public enum TransferResult {
+        OK,
+        /** ไม่มี order นี้ หรือไม่ใช่ของลูกค้าคนนี้ */
+        NOT_FOUND,
+        /** order นี้ไม่ได้จ่ายด้วยการโอนพร้อมเพย์ */
+        NOT_TRANSFER,
+        /** สถานะไม่อยู่ในขั้นที่ทำรายการนี้ได้ (เช่น หมดเวลา/ยืนยันไปแล้ว) */
+        WRONG_STATE,
+        /** ลิงก์สลิปไม่ได้มาจากระบบอัปโหลดของเรา */
+        INVALID_SLIP
+    }
+
+    /**
+     * ลูกค้ากด "แจ้งโอนแล้ว" → รอแอดมินตรวจยอด
+     *
+     * ยังไม่ใช่ paid — แค่หยุดนับเวลาหมดอายุ และล้างตะกร้าเพราะลูกค้าถือว่าสั่งซื้อเสร็จแล้ว
+     * กดซ้ำได้ (เช่น อัปสลิปใหม่) ตราบใดที่แอดมินยังไม่ตัดสิน
+     *
+     * @param slipUrl รูปสลิปที่อัปผ่าน /api/upload/image — ไม่บังคับ
+     */
+    @Transactional
+    public TransferResult submitTransfer(Long orderId, String email, String slipUrl) {
+        Optional<OrderEntity> opt = orderRepository.findById(orderId)
+                .filter(o -> o.getEmail().equals(email));
+        if (opt.isEmpty())
+            return TransferResult.NOT_FOUND;
+        OrderEntity order = opt.get();
+        TransferResult check = checkDecidable(order);
+        if (check != TransferResult.OK)
+            return check;
+
+        boolean hasSlip = slipUrl != null && !slipUrl.isBlank();
+        if (hasSlip && !slipUrl.startsWith(SLIP_URL_PREFIX))
+            return TransferResult.INVALID_SLIP;
+
+        order.setPaymentStatus(VERIFYING);
+        if (hasSlip) {
+            order.setSlipImage(slipUrl);
+        }
+        orderRepository.save(order);
+        clearCart(email);
+
+        log.info("🧾 order {} ({}) ลูกค้าแจ้งโอนแล้ว รอตรวจสอบ (สลิป={})", orderId, order.getOrdCode(), hasSlip);
+        return TransferResult.OK;
+    }
+
+    /**
+     * แอดมินเห็นยอดเข้าบัญชีแล้ว → paid
+     *
+     * รับทั้ง awaiting_payment ด้วย เผื่อลูกค้าโอนแล้วลืมกดแจ้ง
+     * แต่ไม่รับ expired — stock ถูกคืนไปแล้ว ต้องให้ลูกค้าสั่งใหม่หรือคืนเงิน
+     */
+    @Transactional
+    public TransferResult confirmTransfer(Long orderId, String adminEmail) {
+        Optional<OrderEntity> opt = orderRepository.findById(orderId);
+        if (opt.isEmpty())
+            return TransferResult.NOT_FOUND;
+        OrderEntity order = opt.get();
+        TransferResult check = checkDecidable(order);
+        if (check != TransferResult.OK)
+            return check;
+
+        order.setNote(appendNote(order.getNote(), "ยืนยันยอดโอนพร้อมเพย์โดย " + adminEmail));
+        finalizePaid(order);
+        return TransferResult.OK;
+    }
+
+    /** แอดมินไม่พบยอดโอน → ปิด order และคืน stock */
+    @Transactional
+    public TransferResult rejectTransfer(Long orderId, String reason, String adminEmail) {
+        Optional<OrderEntity> opt = orderRepository.findById(orderId);
+        if (opt.isEmpty())
+            return TransferResult.NOT_FOUND;
+        TransferResult check = checkDecidable(opt.get());
+        if (check != TransferResult.OK)
+            return check;
+
+        String detail = (reason == null || reason.isBlank()) ? "ไม่พบยอดโอน" : reason.trim();
+        releaseOrder(orderId, FAILED, detail + " (โดย " + adminEmail + ")");
+        return TransferResult.OK;
+    }
+
+    /**
+     * order โอนพร้อมเพย์ที่ลูกค้ายังไม่แจ้งโอน และสร้างไว้ก่อนเวลาที่กำหนด
+     *
+     * ไม่รวม awaiting_verification — order ที่แจ้งโอนแล้วต้องรอแอดมินตัดสินเสมอ
+     */
+    public List<Long> findUnsubmittedTransfers(LocalDateTime createdBefore) {
+        return orderRepository.findByPaymentMethodAndPaymentStatusAndCreatedAtBefore(
+                PaymentMethods.PROMPTPAY_TRANSFER, AWAITING, createdBefore)
+                .stream().map(OrderEntity::getId).toList();
+    }
+
+    /** order โอนพร้อมเพย์ที่ยังไม่มีใครตัดสิน (ยังไม่ paid / ไม่ถูกปิด) */
+    private static TransferResult checkDecidable(OrderEntity order) {
+        if (!PaymentMethods.isPromptPayTransfer(order.getPaymentMethod()))
+            return TransferResult.NOT_TRANSFER;
+        if (!AWAITING.equals(order.getPaymentStatus()) && !VERIFYING.equals(order.getPaymentStatus()))
+            return TransferResult.WRONG_STATE;
+        return TransferResult.OK;
+    }
+
+    /** ขั้นสุดท้ายของทุกทางที่ได้เงิน — ตั้ง paid, ล้างตะกร้า, ปิดออเดอร์โต๊ะที่ผูกกับบิลนี้ */
+    private void finalizePaid(OrderEntity order) {
+        order.setPaymentStatus(PAID);
         orderRepository.save(order);
 
         clearCart(order.getEmail());
-        closeDineInOrders(orderId);
-        log.info("✅ order {} ({}) จ่ายเงินสำเร็จ", orderId, order.getOrdCode());
+        closeDineInOrders(order.getId());
+        log.info("✅ order {} ({}) จ่ายเงินสำเร็จ", order.getId(), order.getOrdCode());
     }
 
     /**

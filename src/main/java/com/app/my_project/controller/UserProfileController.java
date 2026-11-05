@@ -4,6 +4,7 @@ import com.app.my_project.entity.UserProfileEntity;
 import com.app.my_project.entity.UserEntity;
 import com.app.my_project.repository.UserProfileRepository;
 import com.app.my_project.repository.UserRepository;
+import com.app.my_project.service.JwtService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,15 +59,21 @@ public class UserProfileController {
                 "api_secret", apiSecret));
     }
 
-    // ✅ Helper: decode JWT → ได้ userId
+    /**
+     * userId ของลูกค้าจาก JWT
+     *
+     * ต้องเป็น token ลูกค้า (role USER) ที่ออกโดยระบบเรา — token แอดมินมี id คนละตาราง
+     * ถ้าไม่เช็ค role แอดมิน id 1 จะเปิด/แก้โปรไฟล์ของลูกค้า id 1 ได้
+     */
     private Long getUserIdFromToken(String authHeader) {
         try {
             if (authHeader == null || !authHeader.startsWith("Bearer "))
                 return null;
-            String token = authHeader.replace("Bearer ", "");
-            JWTVerifier verifier = JWT.require(Algorithm.HMAC256(jwtSecret)).build();
-            String subject = verifier.verify(token).getSubject();
-            return Long.parseLong(subject);
+            JWTVerifier verifier = JWT.require(Algorithm.HMAC256(jwtSecret))
+                    .withIssuer(JwtService.ISSUER)
+                    .withClaim("role", JwtService.ROLE_USER)
+                    .build();
+            return Long.parseLong(verifier.verify(authHeader.substring(7)).getSubject());
         } catch (Exception e) {
             return null;
         }

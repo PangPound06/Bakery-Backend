@@ -58,7 +58,13 @@ public class OrderItemService {
          *
          * ต้องไปทาง /api/cancel-requests ซึ่งคืนเงินจริงและบันทึกไว้ใน tb_refunds
          */
-        PAID_REQUIRES_REFUND
+        PAID_REQUIRES_REFUND,
+
+        /**
+         * ลูกค้ากำลังจ่าย (QR/ฟอร์มบัตรเปิดอยู่) หรือแจ้งโอนแล้วรอตรวจยอด
+         * ยอดที่ลูกค้าเห็นและโอนมาคือยอดเดิม แก้รายการตอนนี้ยอดจะไม่ตรงกับเงินที่ได้
+         */
+        PAYMENT_IN_PROGRESS
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -80,6 +86,9 @@ public class OrderItemService {
         //    เพราะยอดที่เก็บไปแล้วเพิ่มตามไม่ได้
         if (isPaid(order)) {
             return new AddItemResult(Result.PAID_REQUIRES_REFUND, null, null);
+        }
+        if (isPaymentInProgress(order)) {
+            return new AddItemResult(Result.PAYMENT_IN_PROGRESS, null, null);
         }
 
         // แปลง display qty → raw qty
@@ -121,6 +130,7 @@ public class OrderItemService {
         if (isLocked(order)) return new UpdateQtyResult(Result.ORDER_LOCKED, null);
         // ✅ ปิดรู: จ่ายเงินแล้วต้องผ่านระบบขอคืนเงิน
         if (isPaid(order)) return new UpdateQtyResult(Result.PAID_REQUIRES_REFUND, null);
+        if (isPaymentInProgress(order)) return new UpdateQtyResult(Result.PAYMENT_IN_PROGRESS, null);
 
         Optional<OrderItemEntity> itemOpt = orderItemRepository.findById(itemId);
         if (itemOpt.isEmpty()) return new UpdateQtyResult(Result.ITEM_NOT_FOUND, null);
@@ -167,6 +177,7 @@ public class OrderItemService {
         if (isLocked(order)) return new RemoveItemResult(Result.ORDER_LOCKED, null);
         // ✅ ปิดรู: จ่ายเงินแล้วต้องผ่านระบบขอคืนเงิน
         if (isPaid(order)) return new RemoveItemResult(Result.PAID_REQUIRES_REFUND, null);
+        if (isPaymentInProgress(order)) return new RemoveItemResult(Result.PAYMENT_IN_PROGRESS, null);
 
         Optional<OrderItemEntity> itemOpt = orderItemRepository.findById(itemId);
         if (itemOpt.isEmpty()) return new RemoveItemResult(Result.ITEM_NOT_FOUND, null);
@@ -214,7 +225,12 @@ public class OrderItemService {
      * ไม่ตรงกับเงินที่เก็บไปจริง ต้องผ่าน CancelRequestService ซึ่งคืนเงินด้วย
      */
     boolean isPaid(OrderEntity order) {
-        return "paid".equals(order.getPaymentStatus());
+        return PaymentStateService.PAID.equals(order.getPaymentStatus());
+    }
+
+    boolean isPaymentInProgress(OrderEntity order) {
+        return PaymentStateService.AWAITING.equals(order.getPaymentStatus())
+                || PaymentStateService.VERIFYING.equals(order.getPaymentStatus());
     }
 
     /** คำนวณ subtotal/total จาก items ปัจจุบันของ order */

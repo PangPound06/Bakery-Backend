@@ -30,6 +30,9 @@ import java.util.Optional;
 @Service
 public class OrderService {
 
+    /** ขั้นที่หมายถึงร้านลงมือทำของให้แล้ว — order ออนไลน์ต้องได้เงินก่อน */
+    private static final List<String> FULFILMENT_STATUSES = List.of("confirmed", "preparing", "shipping", "delivered");
+
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final DineInOrderRepository dineInOrderRepository;
@@ -160,27 +163,47 @@ public class OrderService {
     // UPDATE
     // ═════════════════════════════════════════════════════════════════
 
+    public enum UpdateStatusResult {
+        SUCCESS,
+        NOT_FOUND,
+        /** ยกเลิกต้องไปทาง cancelOrder — ทางนี้ไม่คืน stock */
+        USE_CANCEL,
+        /**
+         * order ออนไลน์: สถานะจ่ายเงินเปลี่ยนได้จาก Stripe หรือการยืนยันยอดโอนเท่านั้น
+         * และห้ามเดินหน้าไปเตรียม/ส่งของทั้งที่ยังไม่ได้เงิน
+         */
+        PAYMENT_REQUIRED
+    }
+
     /**
-     * Update orderStatus / paymentStatus
-     * ถ้า paymentStatus=paid และ orderType=dine-in → sync paymentStatus dine-in orders
+     * แอดมินเปลี่ยนสถานะ order
      *
-     * @return true ถ้าสำเร็จ, false ถ้าไม่พบ
+     * paymentStatus ใช้ได้กับหน้าร้าน (POS / dine-in) ที่แอดมินรับเงินสดเองเท่านั้น
+     * ถ้า paymentStatus=paid และ orderType=dine-in → sync paymentStatus dine-in orders
      */
     @Transactional
-    public boolean updateStatus(Long orderId, String orderStatus, String paymentStatus) {
+    public UpdateStatusResult updateStatus(Long orderId, String orderStatus, String paymentStatus) {
         Optional<OrderEntity> opt = orderRepository.findById(orderId);
-        if (opt.isEmpty()) return false;
+        if (opt.isEmpty()) return UpdateStatusResult.NOT_FOUND;
+        if ("cancelled".equals(orderStatus)) return UpdateStatusResult.USE_CANCEL;
 
         OrderEntity order = opt.get();
+        if ("online".equals(order.getOrderType())) {
+            boolean changesPayment = paymentStatus != null && !paymentStatus.equals(order.getPaymentStatus());
+            boolean unpaidFulfilment = FULFILMENT_STATUSES.contains(orderStatus)
+                    && !PaymentStateService.PAID.equals(order.getPaymentStatus());
+            if (changesPayment || unpaidFulfilment) return UpdateStatusResult.PAYMENT_REQUIRED;
+        }
+
         if (orderStatus != null) order.setOrderStatus(orderStatus);
         if (paymentStatus != null) order.setPaymentStatus(paymentStatus);
         orderRepository.save(order);
 
         // Side-effect: dine-in + paid → sync dine-in payment status
-        if ("dine-in".equals(order.getOrderType()) && "paid".equals(paymentStatus)) {
+        if ("dine-in".equals(order.getOrderType()) && PaymentStateService.PAID.equals(paymentStatus)) {
             syncDineInPayment(order.getEmail());
         }
-        return true;
+        return UpdateStatusResult.SUCCESS;
     }
 
     private void syncDineInPayment(String email) {
@@ -208,7 +231,9 @@ public class OrderService {
          * ถ้าปล่อยให้ยกเลิก order ที่จ่ายแล้ว = เงินลูกค้าค้างอยู่กับ Stripe
          * โดยไม่มีใครรู้ ต้องไปทาง /api/cancel-requests แทน
          */
-        PAID_REQUIRES_REFUND
+        PAID_REQUIRES_REFUND,
+        /** ลูกค้าแจ้งโอนพร้อมเพย์แล้ว เงินอาจอยู่ในบัญชีร้าน — แอดมินต้องยืนยันหรือปฏิเสธยอดก่อน */
+        AWAITING_VERIFICATION
     }
 
     @Transactional
@@ -217,13 +242,20 @@ public class OrderService {
         if (opt.isEmpty()) return CancelResult.NOT_FOUND;
 
         OrderEntity order = opt.get();
+        // ยกเลิกไปแล้ว → ตอบสำเร็จเฉยๆ ห้ามคืน stock ซ้ำ (กดซ้ำ / order ที่หมดเวลาไปแล้ว)
+        if ("cancelled".equals(order.getOrderStatus())) {
+            return CancelResult.SUCCESS;
+        }
         if ("delivered".equals(order.getOrderStatus())) {
             return CancelResult.ALREADY_DELIVERED;
         }
 
         // ✅ ปิดรู: จ่ายเงินแล้วต้องผ่านระบบขอคืนเงินเท่านั้น
-        if ("paid".equals(order.getPaymentStatus())) {
+        if (PaymentStateService.PAID.equals(order.getPaymentStatus())) {
             return CancelResult.PAID_REQUIRES_REFUND;
+        }
+        if (PaymentStateService.VERIFYING.equals(order.getPaymentStatus())) {
+            return CancelResult.AWAITING_VERIFICATION;
         }
 
         // restore stock for each item (batch แทน loop)

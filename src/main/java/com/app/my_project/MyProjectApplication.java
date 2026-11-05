@@ -5,9 +5,11 @@ import java.util.TimeZone;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 // ใช้ JWT ของเราเอง (JwtAuthFilter) จึงไม่ต้องการ user/password ที่ Spring Security สร้างให้อัตโนมัติ
 @SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
+@EnableScheduling // TransferExpiryJob
 public class MyProjectApplication {
 
 	public static void main(String[] args) {

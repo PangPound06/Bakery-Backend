@@ -1,20 +1,25 @@
 package com.app.my_project.controller;
 
+import com.app.my_project.common.CurrentUser;
+import com.app.my_project.common.PaymentMethods;
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.StoreSettingEntity;
-import com.app.my_project.entity.UserEntity;
 import com.app.my_project.repository.OrderRepository;
-import com.app.my_project.repository.UserRepository;
 import com.app.my_project.service.*;
+import com.google.zxing.WriterException;
+import com.stripe.exception.StripeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -31,9 +36,11 @@ import java.util.Set;
  * 3. ปิดรอบจ่ายเงินเก่าที่ค้างอยู่ — จ่ายแล้วบันทึกเป็น paid, ยังไม่จ่ายยกเลิก QR เดิม (PaymentReconciler)
  * 4. คำนวณราคาใหม่ทั้งใบจาก tb_products
  * 5. สร้าง order เป็น awaiting_payment + จอง stock
- * 6. สร้าง PaymentIntent แล้วส่ง QR (PromptPay) หรือ client_secret (บัตร) กลับไป
+ * 6. ออกช่องทางจ่ายเงินตามที่เลือก
+ *    - promptpay / card → PaymentIntent ของ Stripe (QR หรือ client_secret)
+ *    - transfer → QR พร้อมเพย์ของร้าน แอดมินยืนยันยอดเอง
  *
- * ตะกร้ายังไม่ถูกล้างตรงนี้ — รอ webhook ยืนยันว่าได้เงินก่อน
+ * ตะกร้ายังไม่ถูกล้างตรงนี้ — รอได้เงิน (Stripe) หรือรอลูกค้าแจ้งโอน (transfer) ก่อน
  */
 @RestController
 @RequestMapping("/api/checkout")
@@ -41,8 +48,37 @@ public class CheckoutController {
 
     private static final Logger log = LoggerFactory.getLogger(CheckoutController.class);
 
-    private final JwtService jwtService;
-    private final UserRepository userRepository;
+    /** วิธีชำระเงินที่หน้า checkout ส่งมา → ค่าที่เก็บใน tb_orders.payment_method */
+    enum CheckoutMethod {
+        PROMPTPAY(StripeService.METHOD_PROMPTPAY, PaymentMethods.QR_PROMPTPAY, true),
+        CARD(StripeService.METHOD_CARD, PaymentMethods.CARD, true),
+        TRANSFER("transfer", PaymentMethods.PROMPTPAY_TRANSFER, false);
+
+        final String requestValue;
+        final String storedValue;
+        final boolean viaStripe;
+
+        CheckoutMethod(String requestValue, String storedValue, boolean viaStripe) {
+            this.requestValue = requestValue;
+            this.storedValue = storedValue;
+            this.viaStripe = viaStripe;
+        }
+
+        static Optional<CheckoutMethod> parse(String raw) {
+            return Arrays.stream(values())
+                    .filter(m -> m.requestValue.equalsIgnoreCase(raw))
+                    .findFirst();
+        }
+    }
+
+    /** ข้อมูลจัดส่ง — เป็นข้อมูลเดียวที่รับจาก client */
+    private record Delivery(String name, String phone, String address, String note) {
+        boolean isComplete() {
+            return !isBlank(name) && !isBlank(phone) && !isBlank(address);
+        }
+    }
+
+    private final CurrentUser currentUser;
     private final OrderRepository orderRepository;
     private final OrderService orderService;
     private final PricingService pricingService;
@@ -50,18 +86,18 @@ public class CheckoutController {
     private final StripeService stripeService;
     private final StoreSettingService storeSettingService;
     private final PaymentReconciler paymentReconciler;
+    private final QRCodeService qrCodeService;
 
-    public CheckoutController(JwtService jwtService,
-            UserRepository userRepository,
+    public CheckoutController(CurrentUser currentUser,
             OrderRepository orderRepository,
             OrderService orderService,
             PricingService pricingService,
             PaymentStateService paymentStateService,
             StripeService stripeService,
             StoreSettingService storeSettingService,
-            PaymentReconciler paymentReconciler) {
-        this.jwtService = jwtService;
-        this.userRepository = userRepository;
+            PaymentReconciler paymentReconciler,
+            QRCodeService qrCodeService) {
+        this.currentUser = currentUser;
         this.orderRepository = orderRepository;
         this.orderService = orderService;
         this.pricingService = pricingService;
@@ -69,6 +105,7 @@ public class CheckoutController {
         this.stripeService = stripeService;
         this.storeSettingService = storeSettingService;
         this.paymentReconciler = paymentReconciler;
+        this.qrCodeService = qrCodeService;
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -85,12 +122,12 @@ public class CheckoutController {
             PricingService.PricedCart cart = pricingService.priceCart(email);
             return ResponseEntity.ok(Map.of("success", true, "summary", toSummaryMap(cart)));
         } catch (PricingService.CartValidationException e) {
-            return ResponseEntity.badRequest().body(Map.of("success", false, "error", e.getMessage()));
+            return badRequest(e.getMessage());
         }
     }
 
     // ═════════════════════════════════════════════════════════════════
-    // CREATE PAYMENT INTENT
+    // START PAYMENT
     // ═════════════════════════════════════════════════════════════════
 
     @PostMapping("/intent")
@@ -101,108 +138,141 @@ public class CheckoutController {
         if (email == null)
             return unauthorized();
 
-        if (!stripeService.isEnabled()) {
+        Delivery delivery = new Delivery(str(body.get("receiverName")), str(body.get("receiverPhone")),
+                str(body.get("receiverAddress")), str(body.get("note")));
+        if (!delivery.isComplete())
+            return badRequest("กรุณากรอกข้อมูลการจัดส่งให้ครบถ้วน");
+
+        Optional<CheckoutMethod> parsed = CheckoutMethod.parse(str(body.get("paymentMethod")));
+        if (parsed.isEmpty())
+            return badRequest("กรุณาเลือกวิธีชำระเงิน");
+        CheckoutMethod method = parsed.get();
+
+        if (method.viaStripe && !stripeService.isEnabled()) {
             return ResponseEntity.status(503)
                     .body(Map.of("success", false, "error", "ระบบชำระเงินยังไม่พร้อมใช้งาน"));
         }
-
-        // ─── ข้อมูลจัดส่ง เป็นข้อมูลเดียวที่รับจาก client ───
-        String receiverName = str(body.get("receiverName"));
-        String receiverPhone = str(body.get("receiverPhone"));
-        String receiverAddress = str(body.get("receiverAddress"));
-        String note = str(body.get("note"));
-        String method = normalizeMethod(str(body.get("paymentMethod")));
-
-        if (isBlank(receiverName) || isBlank(receiverPhone) || isBlank(receiverAddress)) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "กรุณากรอกข้อมูลการจัดส่งให้ครบถ้วน"));
-        }
-        if (method == null) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "error", "กรุณาเลือกวิธีชำระเงิน"));
-        }
-
-        // ─── ร้านเปิดอยู่ไหม ───
-        if (!storeSettingService.isOnlineOrderingOpen()) {
-            StoreSettingEntity st = storeSettingService.getStatus();
-            Map<String, Object> resp = new HashMap<>();
-            resp.put("success", false);
-            resp.put("storeClosed", true);
-            resp.put("error", isBlank(st.getClosedMessage())
-                    ? "ขณะนี้ร้านปิดรับออเดอร์ออนไลน์ชั่วคราว"
-                    : st.getClosedMessage());
-            resp.put("reopenAt", st.getReopenAt() == null ? "" : st.getReopenAt());
-            return ResponseEntity.status(403).body(resp);
-        }
+        if (!storeSettingService.isOnlineOrderingOpen())
+            return storeClosed();
 
         OrderEntity order = null;
         try {
             // ─── คำนวณราคาใหม่ทั้งใบ ← หัวใจของความปลอดภัย ───
             PricingService.PricedCart cart = pricingService.priceCart(email);
-
-            // ─── ปิดรอบเก่าก่อน: order ที่จ่ายแล้วแต่ webhook ยังไม่มา จะไม่ถูกเขียนทับ ───
-            Set<Long> locked = paymentReconciler.settleAwaiting(email, "online");
-
-            // ─── มีแถวที่ยังไม่จ่ายค้างอยู่ → เขียนทับแถวนั้น ไม่สร้างแถวใหม่ ───
-            PaymentStateService.ReuseResult reuse = paymentStateService.prepareForNewIntent(
-                    email, locked, toCartLines(cart), cart.subtotal(), cart.shipping(), cart.total());
-            reuse.intentsToCancel().forEach(stripeService::cancelIntent);
-
-            if (reuse.reusable() != null) {
-                // รายการกับ stock ถูกเขียนใหม่ใน prepareForNewIntent แล้ว
-                order = reuse.reusable();
-                order.setPaymentMethod(storedMethod(method));
-                order.setReceiverName(receiverName);
-                order.setReceiverPhone(receiverPhone);
-                order.setReceiverAddress(receiverAddress);
-                order.setNote(note);
-                order = orderRepository.save(order);
-            } else {
-                // ─── สร้าง order + จอง stock ───
-                order = orderService.createOrder(email, buildOrderRequest(
-                        cart, method, receiverName, receiverPhone, receiverAddress, note));
-            }
+            order = reserveOrder(email, cart, method, delivery);
 
             Map<String, Object> resp = new HashMap<>();
             resp.put("success", true);
-            resp.put("method", method);
+            resp.put("method", method.requestValue);
             resp.put("orderId", order.getId());
             resp.put("ordCode", order.getOrdCode());
             resp.put("total", cart.total());
-            // คีย์ sk_test (Stripe sandbox) → หน้าเว็บแสดงลิงก์จำลองการจ่ายเงิน เพราะแอปธนาคารสแกน QR ทดสอบไม่ได้
-            resp.put("testMode", stripeService.isTestMode());
 
-            if (StripeService.METHOD_PROMPTPAY.equals(method)) {
-                StripeService.PromptPayQr qr = stripeService.createPromptPayIntent(order, cart, email);
-                order.setStripePaymentIntentId(qr.paymentIntentId());
-                orderRepository.save(order);
-
-                resp.put("qrImageUrl", qr.qrImageUrl());
-                resp.put("qrData", qr.qrData());
-                resp.put("hostedUrl", qr.hostedInstructionsUrl());
-            } else {
-                StripeService.CardIntent ci = stripeService.createCardIntent(order, cart, email);
-                order.setStripePaymentIntentId(ci.paymentIntentId());
-                orderRepository.save(order);
-
-                resp.put("clientSecret", ci.clientSecret());
+            switch (method) {
+                case PROMPTPAY -> startStripePromptPay(order, cart, email, resp);
+                case CARD -> startStripeCard(order, cart, email, resp);
+                case TRANSFER -> startTransfer(cart, resp);
             }
-
             return ResponseEntity.ok(resp);
 
         } catch (PricingService.CartValidationException | PricingService.ProductNotFoundException e) {
-            return ResponseEntity.badRequest().body(Map.of("success", false, "error", e.getMessage()));
+            return badRequest(e.getMessage());
 
         } catch (Exception e) {
-            log.error("สร้าง payment intent ไม่สำเร็จ (email={}, method={})", email, method, e);
-            // ถ้า order ถูกสร้างไปแล้วแต่ Stripe ล้ม → คืน stock ทันที ไม่ให้ค้าง
+            log.error("เริ่มการชำระเงินไม่สำเร็จ (email={}, method={})", email, method, e);
+            // ถ้า order ถูกสร้างไปแล้วแต่ขั้นถัดไปล้ม → คืน stock ทันที ไม่ให้ค้าง
             if (order != null) {
                 paymentStateService.releaseOrder(order.getId(),
-                        PaymentStateService.FAILED, "สร้าง PaymentIntent ไม่สำเร็จ");
+                        PaymentStateService.FAILED, "เริ่มการชำระเงินไม่สำเร็จ");
             }
             return ResponseEntity.internalServerError()
                     .body(Map.of("success", false, "error", "ไม่สามารถเริ่มการชำระเงินได้ กรุณาลองใหม่"));
         }
+    }
+
+    /**
+     * ได้ order สถานะ awaiting_payment ที่จอง stock ตามตะกร้าแล้ว
+     *
+     * ลูกค้ามีแถวที่ยังไม่จ่ายค้างอยู่ → เขียนทับแถวนั้น ไม่สร้างแถวใหม่ (ดู prepareForNewIntent)
+     * แต่ปิดรอบเก่าก่อนเสมอ — order ที่จ่ายแล้วแต่ webhook ยังไม่มา จะไม่ถูกเขียนทับ
+     */
+    private OrderEntity reserveOrder(String email, PricingService.PricedCart cart,
+            CheckoutMethod method, Delivery delivery) {
+
+        Set<Long> locked = paymentReconciler.settleAwaiting(email, "online");
+
+        PaymentStateService.ReuseResult reuse = paymentStateService.prepareForNewIntent(
+                email, locked, toCartLines(cart), cart.subtotal(), cart.shipping(), cart.total());
+        reuse.intentsToCancel().forEach(stripeService::cancelIntent);
+
+        if (reuse.reusable() == null) {
+            return orderService.createOrder(email, buildOrderRequest(cart, method, delivery));
+        }
+
+        // รายการกับ stock ถูกเขียนใหม่ใน prepareForNewIntent แล้ว
+        OrderEntity order = reuse.reusable();
+        order.setPaymentMethod(method.storedValue);
+        order.setReceiverName(delivery.name());
+        order.setReceiverPhone(delivery.phone());
+        order.setReceiverAddress(delivery.address());
+        order.setNote(delivery.note());
+        return orderRepository.save(order);
+    }
+
+    private void startStripePromptPay(OrderEntity order, PricingService.PricedCart cart, String email,
+            Map<String, Object> resp) throws StripeException {
+        StripeService.PromptPayQr qr = stripeService.createPromptPayIntent(order, cart, email);
+        order.setStripePaymentIntentId(qr.paymentIntentId());
+        orderRepository.save(order);
+
+        resp.put("qrImageUrl", qr.qrImageUrl());
+        resp.put("qrData", qr.qrData());
+        resp.put("hostedUrl", qr.hostedInstructionsUrl());
+        // คีย์ sk_test (Stripe sandbox) → หน้าเว็บแสดงลิงก์จำลองการจ่ายเงิน เพราะแอปธนาคารสแกน QR ทดสอบไม่ได้
+        resp.put("testMode", stripeService.isTestMode());
+    }
+
+    private void startStripeCard(OrderEntity order, PricingService.PricedCart cart, String email,
+            Map<String, Object> resp) throws StripeException {
+        StripeService.CardIntent ci = stripeService.createCardIntent(order, cart, email);
+        order.setStripePaymentIntentId(ci.paymentIntentId());
+        orderRepository.save(order);
+
+        resp.put("clientSecret", ci.clientSecret());
+        resp.put("testMode", stripeService.isTestMode());
+    }
+
+    /** QR พร้อมเพย์ของร้านที่ระบุยอดตรงกับ order — สแกนด้วยแอปธนาคารจริงได้ทันที */
+    private void startTransfer(PricingService.PricedCart cart, Map<String, Object> resp)
+            throws WriterException, IOException {
+        resp.put("qrImageUrl", "data:image/png;base64," + qrCodeService.generateQRCodeBase64(cart.total()));
+        resp.put("promptPayId", qrCodeService.maskedPromptPayId());
+        resp.put("accountName", qrCodeService.accountName());
+        resp.put("expiresInSeconds", PaymentStateService.TRANSFER_PAY_WINDOW.toSeconds());
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    // TRANSFER SUBMITTED — ลูกค้ากด "แจ้งโอนแล้ว"
+    // ═════════════════════════════════════════════════════════════════
+
+    @PostMapping("/transfer/{orderId}/submit")
+    public ResponseEntity<?> submitTransfer(@PathVariable Long orderId,
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        String email = resolveEmail(auth);
+        if (email == null)
+            return unauthorized();
+
+        String slipUrl = body == null ? null : str(body.get("slipUrl"));
+        return switch (paymentStateService.submitTransfer(orderId, email, slipUrl)) {
+            case OK -> ResponseEntity.ok(Map.of("success", true,
+                    "paymentStatus", PaymentStateService.VERIFYING));
+            case NOT_FOUND -> notFound();
+            case NOT_TRANSFER -> badRequest("คำสั่งซื้อนี้ไม่ได้ชำระด้วยการโอนพร้อมเพย์");
+            case WRONG_STATE -> ResponseEntity.status(409).body(Map.of("success", false,
+                    "error", "คำสั่งซื้อนี้หมดเวลาหรือถูกตรวจสอบไปแล้ว กรุณาตรวจสอบที่หน้าคำสั่งซื้อของฉัน"));
+            case INVALID_SLIP -> badRequest("รูปสลิปไม่ถูกต้อง กรุณาอัปโหลดใหม่");
+        };
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -216,24 +286,28 @@ public class CheckoutController {
         if (email == null)
             return unauthorized();
 
-        return orderRepository.findById(orderId)
-                .filter(o -> email.equals(o.getEmail()))
-                .<ResponseEntity<?>>map(o -> {
-                    // ลูกค้าอาจสแกนจ่ายไปแล้วก่อนกดยกเลิก — ห้ามปล่อย order ที่ได้เงินแล้ว
-                    if (paymentReconciler.settle(o) != PaymentReconciler.Outcome.UNPAID) {
-                        return ResponseEntity.status(409).body(Map.of("success", false, "paid", true,
-                                "error", "คำสั่งซื้อนี้ชำระเงินแล้ว ไม่สามารถยกเลิกการชำระเงินได้"));
-                    }
-                    paymentStateService.releaseOrder(o.getId(),
-                            PaymentStateService.EXPIRED, "ลูกค้ายกเลิกเอง");
-                    return ResponseEntity.ok(Map.of("success", true));
-                })
-                .orElseGet(() -> ResponseEntity.status(404)
-                        .body(Map.of("success", false, "error", "ไม่พบคำสั่งซื้อ")));
+        Optional<OrderEntity> owned = orderRepository.findById(orderId)
+                .filter(o -> email.equals(o.getEmail()));
+        if (owned.isEmpty())
+            return notFound();
+        OrderEntity order = owned.get();
+
+        // แจ้งโอนแล้ว เงินอาจอยู่ในบัญชีร้าน — ต้องให้แอดมินตัดสิน ลูกค้ายกเลิกเองไม่ได้
+        if (PaymentStateService.VERIFYING.equals(order.getPaymentStatus())) {
+            return ResponseEntity.status(409).body(Map.of("success", false, "verifying", true,
+                    "error", "แจ้งโอนแล้ว รอร้านตรวจสอบยอด ไม่สามารถยกเลิกเองได้"));
+        }
+        // ลูกค้าอาจสแกนจ่ายไปแล้วก่อนกดยกเลิก — ห้ามปล่อย order ที่ได้เงินแล้ว
+        if (paymentReconciler.settle(order) != PaymentReconciler.Outcome.UNPAID) {
+            return ResponseEntity.status(409).body(Map.of("success", false, "paid", true,
+                    "error", "คำสั่งซื้อนี้ชำระเงินแล้ว ไม่สามารถยกเลิกการชำระเงินได้"));
+        }
+        paymentStateService.releaseOrder(order.getId(), PaymentStateService.EXPIRED, "ลูกค้ายกเลิกเอง");
+        return ResponseEntity.ok(Map.of("success", true));
     }
 
     // ═════════════════════════════════════════════════════════════════
-    // STATUS — หน้า QR และหน้า success เรียก poll ตัวนี้จนกว่า webhook จะมาถึง
+    // STATUS — หน้า QR และหน้า success เรียก poll ตัวนี้จนกว่าจะได้ผล
     // ═════════════════════════════════════════════════════════════════
 
     @GetMapping("/status/{orderId}")
@@ -250,11 +324,11 @@ public class CheckoutController {
                         "success", true,
                         "orderId", o.getId(),
                         "ordCode", o.getOrdCode() == null ? "" : o.getOrdCode(),
+                        "paymentMethod", o.getPaymentMethod() == null ? "" : o.getPaymentMethod(),
                         "paymentStatus", o.getPaymentStatus() == null ? "" : o.getPaymentStatus(),
                         "orderStatus", o.getOrderStatus() == null ? "" : o.getOrderStatus(),
                         "total", o.getTotal() == null ? 0.0 : o.getTotal())))
-                .orElseGet(() -> ResponseEntity.status(404)
-                        .body(Map.of("success", false, "error", "ไม่พบคำสั่งซื้อ")));
+                .orElseGet(this::notFound);
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -271,78 +345,50 @@ public class CheckoutController {
         return orderRepository.findById(order.getId()).orElse(order);
     }
 
-    /** email จาก JWT เท่านั้น — ไม่รับจาก body */
+    /** email จาก JWT ของลูกค้าเท่านั้น — ไม่รับจาก body */
     private String resolveEmail(String authHeader) {
-        Long userId = jwtService.getUserIdFromHeader(authHeader);
-        if (userId == null)
-            return null;
-        return userRepository.findById(userId).map(UserEntity::getEmail).orElse(null);
+        return currentUser.customerEmail(authHeader).orElse(null);
     }
 
     /** แปลงตะกร้าที่คิดราคาแล้วเป็นรูปแบบที่เอาไปเทียบกับ order ค้างได้ */
     private static List<PaymentStateService.CartLine> toCartLines(PricingService.PricedCart cart) {
-        List<PaymentStateService.CartLine> lines = new ArrayList<>();
-        for (PricingService.PricedLine l : cart.lines()) {
-            lines.add(new PaymentStateService.CartLine(
-                    l.productId(), l.productName(), l.selectedOption(),
-                    l.rawQuantity(), l.unitPrice(), l.image()));
-        }
-        return lines;
+        return cart.lines().stream()
+                .map(l -> new PaymentStateService.CartLine(
+                        l.productId(), l.productName(), l.selectedOption(),
+                        l.rawQuantity(), l.unitPrice(), l.image()))
+                .toList();
     }
 
-    /**
-     * แปลงวิธีชำระเงินเป็นค่าที่เก็บใน tb_orders.payment_method
-     *
-     * ค่าที่คืนต้องตรงกับที่ frontend ใช้อยู่แล้ว: qr_promptpay / card / cash
-     * แต่ละ intent สร้างด้วย payment method type เดียว ค่านี้จึงตรงกับความจริงเสมอ
-     */
-    private static String storedMethod(String method) {
-        return StripeService.METHOD_PROMPTPAY.equals(method) ? "qr_promptpay" : "card";
-    }
+    private static OrderService.CreateOrderRequest buildOrderRequest(
+            PricingService.PricedCart cart, CheckoutMethod method, Delivery delivery) {
 
-    /** รับแค่ 2 ค่าที่รู้จัก อย่างอื่นตีเป็น null */
-    private static String normalizeMethod(String raw) {
-        if (raw == null)
-            return null;
-        String v = raw.toLowerCase();
-        if (StripeService.METHOD_PROMPTPAY.equals(v) || StripeService.METHOD_CARD.equals(v))
-            return v;
-        return null;
-    }
-
-    private OrderService.CreateOrderRequest buildOrderRequest(
-            PricingService.PricedCart cart,
-            String method,
-            String name, String phone, String address, String note) {
-
-        List<OrderService.OrderItemRequest> items = new ArrayList<>();
-        for (PricingService.PricedLine line : cart.lines()) {
-            items.add(new OrderService.OrderItemRequest(
-                    line.productId(),
-                    line.productName(),
-                    line.unitPrice(),
-                    line.rawQuantity(), // เก็บเป็น "ชิ้น" ตาม convention เดิมของ tb_order_items
-                    line.selectedOption(),
-                    line.image()));
-        }
+        List<OrderService.OrderItemRequest> items = cart.lines().stream()
+                .map(line -> new OrderService.OrderItemRequest(
+                        line.productId(),
+                        line.productName(),
+                        line.unitPrice(),
+                        line.rawQuantity(), // เก็บเป็น "ชิ้น" ตาม convention เดิมของ tb_order_items
+                        line.selectedOption(),
+                        line.image()))
+                .toList();
 
         return new OrderService.CreateOrderRequest(
                 cart.subtotal(),
                 cart.shipping(),
                 cart.total(),
-                storedMethod(method),
-                PaymentStateService.AWAITING, // ← ไม่ใช่ "paid" จนกว่า webhook จะยืนยัน
+                method.storedValue,
+                PaymentStateService.AWAITING, // ← ไม่ใช่ "paid" จนกว่าจะยืนยันได้เงินจริง
                 null, // paymentId มาทีหลังจาก Stripe
                 "online",
                 "pending",
-                null, // ไม่มีสลิปแล้ว
+                null, // สลิปมาทีหลังตอนลูกค้าแจ้งโอน
                 null, // ไม่เก็บชื่อบนบัตร — Stripe จัดการเอง
                 null, // ไม่เก็บ 4 ตัวท้าย — ดูได้ใน Stripe Dashboard
-                name, phone, address, note,
+                delivery.name(), delivery.phone(), delivery.address(), delivery.note(),
                 items);
     }
 
-    private Map<String, Object> toSummaryMap(PricingService.PricedCart cart) {
+    private static Map<String, Object> toSummaryMap(PricingService.PricedCart cart) {
         List<Map<String, Object>> items = new ArrayList<>();
         for (PricingService.PricedLine l : cart.lines()) {
             Map<String, Object> m = new HashMap<>();
@@ -363,8 +409,28 @@ public class CheckoutController {
         return m;
     }
 
+    private ResponseEntity<?> storeClosed() {
+        StoreSettingEntity st = storeSettingService.getStatus();
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("success", false);
+        resp.put("storeClosed", true);
+        resp.put("error", isBlank(st.getClosedMessage())
+                ? "ขณะนี้ร้านปิดรับออเดอร์ออนไลน์ชั่วคราว"
+                : st.getClosedMessage());
+        resp.put("reopenAt", st.getReopenAt() == null ? "" : st.getReopenAt());
+        return ResponseEntity.status(403).body(resp);
+    }
+
     private ResponseEntity<?> unauthorized() {
         return ResponseEntity.status(401).body(Map.of("success", false, "error", "กรุณาเข้าสู่ระบบ"));
+    }
+
+    private ResponseEntity<?> notFound() {
+        return ResponseEntity.status(404).body(Map.of("success", false, "error", "ไม่พบคำสั่งซื้อ"));
+    }
+
+    private static ResponseEntity<?> badRequest(String message) {
+        return ResponseEntity.badRequest().body(Map.of("success", false, "error", message));
     }
 
     private static String str(Object v) {

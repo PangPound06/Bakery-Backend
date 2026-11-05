@@ -269,7 +269,8 @@ public class CancelRequestService {
                 requestId, orderId, StripeService.toBaht(amount), mode);
 
         return new Result(requestId, orderId, STATUS_APPROVED,
-                StripeService.toBaht(amount), StripeService.toBaht(feeDeducted));
+                StripeService.toBaht(amount), StripeService.toBaht(feeDeducted),
+                RefundService.isManualPayout(order));
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -297,7 +298,7 @@ public class CancelRequestService {
         markDecided(requestId, STATUS_REJECTED, adminEmail, note);
         log.info("❌ ปฏิเสธคำขอ #{} order {} — {}", requestId, orderId, note);
 
-        return new Result(requestId, orderId, STATUS_REJECTED, 0.0, 0.0);
+        return new Result(requestId, orderId, STATUS_REJECTED, 0.0, 0.0, false);
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -525,8 +526,11 @@ public class CancelRequestService {
             double refundAmount, boolean includesShipping) {
     }
 
+    /**
+     * @param manualPayout true = ระบบบันทึกยอดคืนแล้ว แต่แอดมินต้องโอนเงินคืนลูกค้าเอง (order โอนพร้อมเพย์)
+     */
     public record Result(Long requestId, Long orderId, String status,
-            double refundAmount, double feeDeducted) {
+            double refundAmount, double feeDeducted, boolean manualPayout) {
     }
 
     private record ResolvedLine(Long orderItemId, Long productId, int rawQuantity,

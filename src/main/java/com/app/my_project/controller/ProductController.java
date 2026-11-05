@@ -69,12 +69,13 @@ public class ProductController {
     }
 
     // ── helpers ──────────────────────────────────────────────
-    private boolean isAuthenticated(String authHeader) {
-        return jwtService.getUserIdFromHeader(authHeader) != null;
+    /** สร้าง/แก้/ลบสินค้าได้เฉพาะแอดมิน — ลูกค้าที่ login ก็ห้าม */
+    private boolean isAdmin(String authHeader) {
+        return jwtService.isAdmin(authHeader);
     }
 
-    private ResponseEntity<?> unauthorized() {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new ErrorResponse("กรุณาเข้าสู่ระบบ"));
+    private ResponseEntity<?> forbidden() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ErrorResponse("เฉพาะผู้ดูแลระบบเท่านั้น"));
     }
 
     private ResponseEntity<?> serverError(RuntimeException e) {
@@ -118,8 +119,8 @@ public class ProductController {
     public ResponseEntity<?> createProduct(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody ProductRequest request) {
-        if (!isAuthenticated(authHeader))
-            return unauthorized();
+        if (!isAdmin(authHeader))
+            return forbidden();
         if (request.getName() == null || request.getName().trim().isEmpty())
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new ErrorResponse("กรุณากรอกชื่อสินค้า"));
 
@@ -139,8 +140,8 @@ public class ProductController {
     public ResponseEntity<?> updateProduct(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @PathVariable Long id, @RequestBody ProductRequest request) {
-        if (!isAuthenticated(authHeader))
-            return unauthorized();
+        if (!isAdmin(authHeader))
+            return forbidden();
 
         try {
             if (!productService.exists(id))
@@ -158,8 +159,8 @@ public class ProductController {
     public ResponseEntity<?> deleteProduct(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @PathVariable Long id) {
-        if (!isAuthenticated(authHeader))
-            return unauthorized();
+        if (!isAdmin(authHeader))
+            return forbidden();
 
         try {
             if (!productService.exists(id))

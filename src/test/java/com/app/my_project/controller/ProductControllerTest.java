@@ -49,8 +49,8 @@ class ProductControllerTest {
     private static final String VALID_AUTH = "Bearer valid-token";
     private static final String BAD_AUTH = "Bearer bad-token";
 
-    private void mockAuthenticated() {
-        when(jwtService.getUserIdFromHeader(VALID_AUTH)).thenReturn(1L);
+    private void mockAdmin() {
+        when(jwtService.isAdmin(VALID_AUTH)).thenReturn(true);
     }
 
     private ProductModel makeProduct(Long id) {
@@ -167,20 +167,20 @@ class ProductControllerTest {
     @DisplayName("POST /api/products")
     class Create {
         @Test
-        @DisplayName("ไม่มี token → 401 และไม่เรียก service")
-        void unauthorized() {
-            when(jwtService.getUserIdFromHeader(BAD_AUTH)).thenReturn(null);
+        @DisplayName("ไม่ใช่แอดมิน → 403 และไม่เรียก service")
+        void notAdmin() {
+            when(jwtService.isAdmin(BAD_AUTH)).thenReturn(false);
 
             ResponseEntity<?> res = controller.createProduct(BAD_AUTH, makeRequest("เค้ก"));
 
-            assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+            assertThat(res.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             verify(productService, never()).create(any());
         }
 
         @Test
         @DisplayName("ชื่อสินค้าเป็น null → 400")
         void nullName() {
-            mockAuthenticated();
+            mockAdmin();
 
             ResponseEntity<?> res = controller.createProduct(VALID_AUTH, makeRequest(null));
 
@@ -192,7 +192,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("ชื่อสินค้าเป็นช่องว่าง → 400")
         void blankName() {
-            mockAuthenticated();
+            mockAdmin();
 
             ResponseEntity<?> res = controller.createProduct(VALID_AUTH, makeRequest("   "));
 
@@ -202,7 +202,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("สร้างสำเร็จ → 201 พร้อม id")
         void created() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.create(any())).thenReturn(42L);
 
             ResponseEntity<?> res = controller.createProduct(VALID_AUTH, makeRequest("เค้ก"));
@@ -216,7 +216,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("insert ไม่ได้ id กลับมา → 500")
         void insertFailed() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.create(any())).thenReturn(null);
 
             ResponseEntity<?> res = controller.createProduct(VALID_AUTH, makeRequest("เค้ก"));
@@ -228,7 +228,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("service พัง → 500")
         void serviceError() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.create(any())).thenThrow(new RuntimeException("sql err"));
 
             ResponseEntity<?> res = controller.createProduct(VALID_AUTH, makeRequest("เค้ก"));
@@ -242,13 +242,13 @@ class ProductControllerTest {
     @DisplayName("PUT /api/products/{id}")
     class Update {
         @Test
-        @DisplayName("ไม่มี token → 401 และไม่เรียก service")
-        void unauthorized() {
-            when(jwtService.getUserIdFromHeader(BAD_AUTH)).thenReturn(null);
+        @DisplayName("ไม่ใช่แอดมิน → 403 และไม่เรียก service")
+        void notAdmin() {
+            when(jwtService.isAdmin(BAD_AUTH)).thenReturn(false);
 
             ResponseEntity<?> res = controller.updateProduct(BAD_AUTH, 1L, makeRequest("เค้ก"));
 
-            assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+            assertThat(res.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             verify(productService, never()).exists(any());
             verify(productService, never()).update(any(), any());
         }
@@ -256,7 +256,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("ไม่เจอสินค้า → 404 และไม่เรียก update")
         void notFound() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.exists(99L)).thenReturn(false);
 
             ResponseEntity<?> res = controller.updateProduct(VALID_AUTH, 99L, makeRequest("เค้ก"));
@@ -268,7 +268,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("แก้ไขสำเร็จ → 200 พร้อม id")
         void updated() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.exists(1L)).thenReturn(true);
             when(productService.update(eq(1L), any())).thenReturn(true);
 
@@ -283,7 +283,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("update ไม่มีแถวถูกแก้ → 500")
         void updateFailed() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.exists(1L)).thenReturn(true);
             when(productService.update(eq(1L), any())).thenReturn(false);
 
@@ -296,7 +296,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("service พัง → 500")
         void serviceError() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.exists(1L)).thenReturn(true);
             when(productService.update(eq(1L), any())).thenThrow(new RuntimeException("err"));
 
@@ -310,13 +310,13 @@ class ProductControllerTest {
     @DisplayName("DELETE /api/products/{id}")
     class Delete {
         @Test
-        @DisplayName("ไม่มี token → 401 และไม่เรียก service")
-        void unauthorized() {
-            when(jwtService.getUserIdFromHeader(BAD_AUTH)).thenReturn(null);
+        @DisplayName("ไม่ใช่แอดมิน → 403 และไม่เรียก service")
+        void notAdmin() {
+            when(jwtService.isAdmin(BAD_AUTH)).thenReturn(false);
 
             ResponseEntity<?> res = controller.deleteProduct(BAD_AUTH, 1L);
 
-            assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+            assertThat(res.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             verify(productService, never()).exists(any());
             verify(productService, never()).delete(any());
         }
@@ -324,7 +324,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("ไม่เจอสินค้า → 404 และไม่เรียก delete")
         void notFound() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.exists(99L)).thenReturn(false);
 
             ResponseEntity<?> res = controller.deleteProduct(VALID_AUTH, 99L);
@@ -336,7 +336,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("ลบสำเร็จ → 200")
         void deleted() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.exists(1L)).thenReturn(true);
             when(productService.delete(1L)).thenReturn(true);
 
@@ -349,7 +349,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("delete ไม่มีแถวถูกลบ → 500")
         void deleteFailed() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.exists(1L)).thenReturn(true);
             when(productService.delete(1L)).thenReturn(false);
 
@@ -362,7 +362,7 @@ class ProductControllerTest {
         @Test
         @DisplayName("service พัง → 500")
         void serviceError() {
-            mockAuthenticated();
+            mockAdmin();
             when(productService.exists(1L)).thenReturn(true);
             when(productService.delete(1L)).thenThrow(new RuntimeException("err"));
 

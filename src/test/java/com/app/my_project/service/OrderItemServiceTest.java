@@ -372,4 +372,47 @@ class OrderItemServiceTest {
             assertThat(service.isLocked(makeOrder(1L, "preparing"))).isFalse();
         }
     }
+
+    // ═════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("แก้รายการระหว่าง/หลังจ่ายเงิน")
+    class PaymentGuardTests {
+
+        private OrderEntity orderWithPayment(String paymentStatus) {
+            OrderEntity order = makeOrder(1L, "pending");
+            order.setPaymentStatus(paymentStatus);
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+            return order;
+        }
+
+        @Test
+        @DisplayName("จ่ายแล้ว → PAID_REQUIRES_REFUND ทั้งเพิ่ม/แก้/ลบ")
+        void paid_requiresRefund() {
+            orderWithPayment(PaymentStateService.PAID);
+
+            assertThat(service.addItem(1L, new OrderItemService.AddItemRequest(10L, "Cake", 100.0, 1, null, null))
+                    .result()).isEqualTo(OrderItemService.Result.PAID_REQUIRES_REFUND);
+            assertThat(service.updateQuantity(1L, 100L, 2).result())
+                    .isEqualTo(OrderItemService.Result.PAID_REQUIRES_REFUND);
+            assertThat(service.removeItem(1L, 100L).result())
+                    .isEqualTo(OrderItemService.Result.PAID_REQUIRES_REFUND);
+            verifyNoInteractions(stockService);
+        }
+
+        @Test
+        @DisplayName("กำลังจ่าย / แจ้งโอนรอตรวจ → PAYMENT_IN_PROGRESS (ยอดที่ลูกค้าจ่ายคือยอดเดิม)")
+        void inProgress_blocked() {
+            for (String status : new String[] { PaymentStateService.AWAITING, PaymentStateService.VERIFYING }) {
+                orderWithPayment(status);
+
+                assertThat(service.addItem(1L, new OrderItemService.AddItemRequest(10L, "Cake", 100.0, 1, null, null))
+                        .result()).as(status).isEqualTo(OrderItemService.Result.PAYMENT_IN_PROGRESS);
+                assertThat(service.updateQuantity(1L, 100L, 2).result())
+                        .as(status).isEqualTo(OrderItemService.Result.PAYMENT_IN_PROGRESS);
+                assertThat(service.removeItem(1L, 100L).result())
+                        .as(status).isEqualTo(OrderItemService.Result.PAYMENT_IN_PROGRESS);
+            }
+            verifyNoInteractions(stockService);
+        }
+    }
 }

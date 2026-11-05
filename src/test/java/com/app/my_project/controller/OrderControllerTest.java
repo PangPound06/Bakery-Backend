@@ -1,10 +1,9 @@
 package com.app.my_project.controller;
 
+import com.app.my_project.common.CurrentUser;
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
-import com.app.my_project.repository.AdminRepository;
 import com.app.my_project.repository.OrderItemRepository;
-import com.app.my_project.repository.UserRepository;
 import com.app.my_project.service.*;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -43,13 +42,15 @@ class OrderControllerTest {
     @Mock
     private StockService stockService;
     @Mock
-    private JwtService jwtService;
+    private CurrentUser currentUser;
     @Mock
-    private AdminRepository adminRepository;
-    @Mock
-    private UserRepository userRepository;
+    private StoreSettingService storeSettingService;
     @Mock
     private RefundService refundService;
+    @Mock
+    private PaymentStateService paymentStateService;
+    @Mock
+    private PaymentReconciler paymentReconciler;
 
     @InjectMocks
     private OrderController controller;
@@ -58,13 +59,16 @@ class OrderControllerTest {
     private static final String USER_AUTH = "Bearer user-token";
 
     private void mockAdmin() {
-        when(jwtService.isAdmin(ADMIN_AUTH)).thenReturn(true);
-        when(jwtService.getUserIdFromHeader(ADMIN_AUTH)).thenReturn(1L);
-        when(adminRepository.existsById(1L)).thenReturn(true);
+        when(currentUser.isAdmin(ADMIN_AUTH)).thenReturn(true);
     }
 
     private void mockNotAdmin() {
-        when(jwtService.isAdmin(USER_AUTH)).thenReturn(false);
+        when(currentUser.isAdmin(USER_AUTH)).thenReturn(false);
+    }
+
+    /** ลูกค้า user@test.com (เจ้าของ makeOrder) */
+    private void mockOwner() {
+        when(currentUser.isAdminOrOwner(USER_AUTH, "user@test.com")).thenReturn(true);
     }
 
     private OrderEntity makeOrder(Long id) {
@@ -118,7 +122,7 @@ class OrderControllerTest {
         @Test
         @DisplayName("ไม่มี token → 401 (ลูกค้าต้องล็อกอิน และ email มาจาก token เท่านั้น)")
         void create_withoutToken_returns401() {
-            when(jwtService.getUserIdFromHeader(null)).thenReturn(null);
+            when(currentUser.customerEmail(null)).thenReturn(Optional.empty());
 
             Map<String, Object> body = new HashMap<>();
             body.put("email", "someone-else@test.com");
@@ -150,24 +154,38 @@ class OrderControllerTest {
     class GetTests {
 
         @Test
-        @DisplayName("GET /user/{email} → return list")
-        void getByEmail_returnsList() {
+        @DisplayName("GET /user/{email} เจ้าของ → return list")
+        void getByEmail_owner_returnsList() {
+            when(currentUser.isAdminOrOwner(USER_AUTH, "a@b.com")).thenReturn(true);
             when(orderService.getByEmail(eq("a@b.com"), any()))
                     .thenReturn(new PageImpl<>(List.of(makeOrder(1L))));
             when(orderItemRepository.findByOrderIdIn(any())).thenReturn(List.of());
 
-            ResponseEntity<?> response = controller.getByEmail("a@b.com", 0, 20);
+            ResponseEntity<?> response = controller.getByEmail("a@b.com", USER_AUTH, 0, 20);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
         }
 
         @Test
-        @DisplayName("GET /{id} เจอ → 200 + order map")
+        @DisplayName("GET /user/{email} ของคนอื่น / ไม่ login → 403 (ไม่ให้เห็นชื่อ เบอร์ ที่อยู่)")
+        void getByEmail_otherCustomer_forbidden() {
+            when(currentUser.isAdminOrOwner(any(), eq("victim@test.com"))).thenReturn(false);
+
+            assertThat(controller.getByEmail("victim@test.com", USER_AUTH, 0, 20).getStatusCode().value())
+                    .isEqualTo(403);
+            assertThat(controller.getByEmail("victim@test.com", null, 0, 20).getStatusCode().value())
+                    .isEqualTo(403);
+            verify(orderService, never()).getByEmail(any(), any());
+        }
+
+        @Test
+        @DisplayName("GET /{id} เจ้าของ → 200 + order map")
         void getById_found() {
+            mockOwner();
             when(orderService.getById(1L)).thenReturn(Optional.of(makeOrder(1L)));
             when(orderItemRepository.findByOrderId(1L)).thenReturn(List.of());
 
-            ResponseEntity<?> response = controller.getById(1L);
+            ResponseEntity<?> response = controller.getById(1L, USER_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             @SuppressWarnings("unchecked")
@@ -183,9 +201,19 @@ class OrderControllerTest {
         void getById_notFound() {
             when(orderService.getById(999L)).thenReturn(Optional.empty());
 
-            ResponseEntity<?> response = controller.getById(999L);
+            ResponseEntity<?> response = controller.getById(999L, USER_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(404);
+        }
+
+        @Test
+        @DisplayName("GET /{id} order ของคนอื่น → 404 (ไม่บอกว่ามี id นี้อยู่จริง)")
+        void getById_otherCustomer_404() {
+            when(orderService.getById(1L)).thenReturn(Optional.of(makeOrder(1L)));
+            when(currentUser.isAdminOrOwner(USER_AUTH, "user@test.com")).thenReturn(false);
+
+            assertThat(controller.getById(1L, USER_AUTH).getStatusCode().value()).isEqualTo(404);
+            verifyNoInteractions(orderItemRepository);
         }
 
         @Test
@@ -212,18 +240,49 @@ class OrderControllerTest {
         }
 
         @Test
-        @DisplayName("GET /search/{code} เจอ → 200 with wrapped format")
+        @DisplayName("GET /search/{code} เจ้าของ → 200 พร้อมข้อมูลติดต่อครบ")
         void search_found() {
-            when(orderService.searchByCode("ORD1047291")).thenReturn(Optional.of(makeOrder(1L)));
+            mockOwner();
+            OrderEntity order = makeOrder(1L);
+            order.setReceiverPhone("0812345678");
+            order.setReceiverAddress("1 ถนนสุขุมวิท");
+            when(orderService.searchByCode("ORD1047291")).thenReturn(Optional.of(order));
             when(orderItemRepository.findByOrderId(1L)).thenReturn(List.of());
 
-            ResponseEntity<?> response = controller.searchByCode("ORD1047291");
+            ResponseEntity<?> response = controller.searchByCode("ORD1047291", USER_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             @SuppressWarnings("unchecked")
             Map<String, Object> body = (Map<String, Object>) response.getBody();
             assertThat(body.get("success")).isEqualTo(true);
-            assertThat(body.get("order")).isNotNull();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> orderMap = (Map<String, Object>) body.get("order");
+            assertThat(orderMap).containsEntry("receiverPhone", "0812345678")
+                    .containsEntry("receiverAddress", "1 ถนนสุขุมวิท");
+        }
+
+        @Test
+        @DisplayName("GET /search/{code} คนอื่น → เห็นสถานะ แต่ซ่อน email ที่อยู่ สลิป และเบอร์")
+        void search_stranger_hidesContact() {
+            OrderEntity order = makeOrder(1L);
+            order.setReceiverPhone("0812345678");
+            order.setReceiverAddress("1 ถนนสุขุมวิท");
+            order.setSlipImage("https://res.cloudinary.com/slip.png");
+            when(orderService.searchByCode("ORD1047291")).thenReturn(Optional.of(order));
+            when(orderItemRepository.findByOrderId(1L)).thenReturn(List.of());
+            when(currentUser.isAdminOrOwner(null, "user@test.com")).thenReturn(false);
+
+            ResponseEntity<?> response = controller.searchByCode("ORD1047291", null);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> orderMap = (Map<String, Object>) ((Map<String, Object>) response.getBody())
+                    .get("order");
+            assertThat(orderMap)
+                    .containsEntry("orderStatus", "pending")
+                    .containsEntry("receiverPhone", "xxxxxx5678")
+                    .containsEntry("receiverAddress", null)
+                    .containsEntry("email", null)
+                    .containsEntry("slipImage", null);
         }
 
         @Test
@@ -231,7 +290,7 @@ class OrderControllerTest {
         void search_notFound() {
             when(orderService.searchByCode("BADCODE")).thenReturn(Optional.empty());
 
-            ResponseEntity<?> response = controller.searchByCode("BADCODE");
+            ResponseEntity<?> response = controller.searchByCode("BADCODE", null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(404);
         }
@@ -246,7 +305,8 @@ class OrderControllerTest {
         @DisplayName("Admin + update success → 200")
         void admin_success() {
             mockAdmin();
-            when(orderService.updateStatus(eq(1L), any(), any())).thenReturn(true);
+            when(orderService.updateStatus(eq(1L), any(), any()))
+                    .thenReturn(OrderService.UpdateStatusResult.SUCCESS);
 
             ResponseEntity<?> response = controller.updateStatus(1L,
                     Map.of("orderStatus", "shipping"), ADMIN_AUTH);
@@ -270,12 +330,28 @@ class OrderControllerTest {
         @DisplayName("Admin + order not found → 404")
         void admin_notFound() {
             mockAdmin();
-            when(orderService.updateStatus(eq(999L), any(), any())).thenReturn(false);
+            when(orderService.updateStatus(eq(999L), any(), any()))
+                    .thenReturn(OrderService.UpdateStatusResult.NOT_FOUND);
 
             ResponseEntity<?> response = controller.updateStatus(999L,
                     Map.of("orderStatus", "shipping"), ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(404);
+        }
+
+        @Test
+        @DisplayName("ยกเลิกผ่านทางนี้ → 400 / order ออนไลน์ยังไม่ได้เงิน → 409")
+        void admin_rejectedTransitions() {
+            mockAdmin();
+            when(orderService.updateStatus(1L, "cancelled", null))
+                    .thenReturn(OrderService.UpdateStatusResult.USE_CANCEL);
+            when(orderService.updateStatus(1L, "confirmed", null))
+                    .thenReturn(OrderService.UpdateStatusResult.PAYMENT_REQUIRED);
+
+            assertThat(controller.updateStatus(1L, Map.of("orderStatus", "cancelled"), ADMIN_AUTH)
+                    .getStatusCode().value()).isEqualTo(400);
+            assertThat(controller.updateStatus(1L, Map.of("orderStatus", "confirmed"), ADMIN_AUTH)
+                    .getStatusCode().value()).isEqualTo(409);
         }
     }
 
@@ -284,34 +360,131 @@ class OrderControllerTest {
     @DisplayName("PUT /{id}/cancel")
     class CancelTests {
 
+        private void ownOrder(OrderEntity order) {
+            when(orderService.getById(order.getId())).thenReturn(Optional.of(order));
+            mockOwner();
+        }
+
         @Test
         @DisplayName("SUCCESS → 200")
         void cancelSuccess_200() {
+            ownOrder(makeOrder(1L));
             when(orderService.cancelOrder(1L)).thenReturn(OrderService.CancelResult.SUCCESS);
 
-            ResponseEntity<?> response = controller.cancelOrder(1L, null);
+            ResponseEntity<?> response = controller.cancelOrder(1L, USER_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
         }
 
         @Test
-        @DisplayName("NOT_FOUND → 404")
-        void cancelNotFound_404() {
-            when(orderService.cancelOrder(999L)).thenReturn(OrderService.CancelResult.NOT_FOUND);
+        @DisplayName("ไม่มี order / order ของคนอื่น / ไม่ login → 404 และไม่แตะ stock")
+        void cancelNotOwned_404() {
+            when(orderService.getById(999L)).thenReturn(Optional.empty());
+            when(orderService.getById(1L)).thenReturn(Optional.of(makeOrder(1L)));
+            when(currentUser.isAdminOrOwner(any(), eq("user@test.com"))).thenReturn(false);
 
-            ResponseEntity<?> response = controller.cancelOrder(999L, null);
-
-            assertThat(response.getStatusCode().value()).isEqualTo(404);
+            assertThat(controller.cancelOrder(999L, USER_AUTH).getStatusCode().value()).isEqualTo(404);
+            assertThat(controller.cancelOrder(1L, USER_AUTH).getStatusCode().value()).isEqualTo(404);
+            assertThat(controller.cancelOrder(1L, null).getStatusCode().value()).isEqualTo(404);
+            verify(orderService, never()).cancelOrder(any());
         }
 
         @Test
         @DisplayName("✅ ALREADY_DELIVERED → 400 with message")
         void alreadyDelivered_400() {
+            ownOrder(makeOrder(1L));
             when(orderService.cancelOrder(1L)).thenReturn(OrderService.CancelResult.ALREADY_DELIVERED);
 
-            ResponseEntity<?> response = controller.cancelOrder(1L, null);
+            ResponseEntity<?> response = controller.cancelOrder(1L, USER_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(400);
+        }
+
+        @Test
+        @DisplayName("แจ้งโอนแล้ว รอแอดมินตรวจ → 409")
+        void awaitingVerification_409() {
+            ownOrder(makeOrder(1L));
+            when(orderService.cancelOrder(1L)).thenReturn(OrderService.CancelResult.AWAITING_VERIFICATION);
+
+            assertThat(controller.cancelOrder(1L, USER_AUTH).getStatusCode().value()).isEqualTo(409);
+        }
+
+        @Test
+        @DisplayName("ยังรอจ่าย Stripe → ปิด QR กับ Stripe ก่อน แล้วค่อยคืน stock")
+        void awaitingPayment_settlesWithStripeFirst() {
+            OrderEntity order = makeOrder(1L);
+            order.setPaymentStatus(PaymentStateService.AWAITING);
+            ownOrder(order);
+            when(paymentReconciler.settle(order)).thenReturn(PaymentReconciler.Outcome.UNPAID);
+
+            assertThat(controller.cancelOrder(1L, USER_AUTH).getStatusCode().value()).isEqualTo(200);
+            verify(paymentStateService).releaseOrder(eq(1L), eq(PaymentStateService.EXPIRED), any());
+            verify(orderService, never()).cancelOrder(any());
+        }
+
+        @Test
+        @DisplayName("ยังรอจ่าย แต่ Stripe บอกว่าลูกค้าจ่ายแล้ว → 409 ต้องขอคืนเงิน")
+        void awaitingPayment_butPaid_409() {
+            OrderEntity order = makeOrder(1L);
+            order.setPaymentStatus(PaymentStateService.AWAITING);
+            ownOrder(order);
+            when(paymentReconciler.settle(order)).thenReturn(PaymentReconciler.Outcome.PAID);
+
+            assertThat(controller.cancelOrder(1L, USER_AUTH).getStatusCode().value()).isEqualTo(409);
+            verify(paymentStateService, never()).releaseOrder(any(), any(), any());
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("POST /{id}/transfer/confirm|reject")
+    class TransferTests {
+
+        @Test
+        @DisplayName("แอดมินยืนยันยอดโอน → 200 และบันทึกว่าใครยืนยัน")
+        void confirm_admin_200() {
+            when(currentUser.adminEmail(ADMIN_AUTH)).thenReturn(Optional.of("boss@empbakery.com"));
+            when(paymentStateService.confirmTransfer(1L, "boss@empbakery.com"))
+                    .thenReturn(PaymentStateService.TransferResult.OK);
+
+            assertThat(controller.confirmTransfer(1L, ADMIN_AUTH).getStatusCode().value()).isEqualTo(200);
+        }
+
+        @Test
+        @DisplayName("ไม่ใช่แอดมิน → 403 ยืนยัน/ปฏิเสธไม่ได้")
+        void nonAdmin_403() {
+            when(currentUser.adminEmail(USER_AUTH)).thenReturn(Optional.empty());
+
+            assertThat(controller.confirmTransfer(1L, USER_AUTH).getStatusCode().value()).isEqualTo(403);
+            assertThat(controller.rejectTransfer(1L, Map.of(), USER_AUTH).getStatusCode().value()).isEqualTo(403);
+            verifyNoInteractions(paymentStateService);
+        }
+
+        @Test
+        @DisplayName("ปฏิเสธพร้อมเหตุผล → ส่งเหตุผลต่อให้ service")
+        void reject_passesReason() {
+            when(currentUser.adminEmail(ADMIN_AUTH)).thenReturn(Optional.of("boss@empbakery.com"));
+            when(paymentStateService.rejectTransfer(1L, "ยอดไม่ตรง", "boss@empbakery.com"))
+                    .thenReturn(PaymentStateService.TransferResult.OK);
+
+            assertThat(controller.rejectTransfer(1L, Map.of("reason", "ยอดไม่ตรง"), ADMIN_AUTH)
+                    .getStatusCode().value()).isEqualTo(200);
+        }
+
+        @Test
+        @DisplayName("ผลจาก service → HTTP status")
+        void mapsResults() {
+            when(currentUser.adminEmail(ADMIN_AUTH)).thenReturn(Optional.of("boss@empbakery.com"));
+            when(paymentStateService.confirmTransfer(eq(1L), any()))
+                    .thenReturn(PaymentStateService.TransferResult.NOT_FOUND);
+            when(paymentStateService.confirmTransfer(eq(2L), any()))
+                    .thenReturn(PaymentStateService.TransferResult.NOT_TRANSFER);
+            when(paymentStateService.confirmTransfer(eq(3L), any()))
+                    .thenReturn(PaymentStateService.TransferResult.WRONG_STATE);
+
+            assertThat(controller.confirmTransfer(1L, ADMIN_AUTH).getStatusCode().value()).isEqualTo(404);
+            assertThat(controller.confirmTransfer(2L, ADMIN_AUTH).getStatusCode().value()).isEqualTo(400);
+            assertThat(controller.confirmTransfer(3L, ADMIN_AUTH).getStatusCode().value()).isEqualTo(409);
         }
     }
 
@@ -560,21 +733,42 @@ class OrderControllerTest {
     class StatsTests {
 
         @Test
-        @DisplayName("✅ Returns full response shape (no auth required)")
-        void returnsResponse() {
+        @DisplayName("✅ แอดมิน → ได้ยอดขายครบ")
+        void admin_seesRevenue() {
+            mockAdmin();
             OrderStatsService.TopProduct top = new OrderStatsService.TopProduct(
                     "Cake", "1 ปอนด์", "cake", 5L, 500L, 3L);
             when(orderStatsService.getTopProducts("7"))
                     .thenReturn(new OrderStatsService.TopProductsResult(
                             List.of(top), 1000L, 10L, 5L, 1));
 
-            ResponseEntity<?> response = controller.topProducts("7", null);
+            ResponseEntity<?> response = controller.topProducts("7", ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             @SuppressWarnings("unchecked")
             Map<String, Object> body = (Map<String, Object>) response.getBody();
             assertThat(body.get("totalAllRevenue")).isEqualTo(1000L);
-            assertThat(body.get("topProducts")).isInstanceOf(List.class);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> products = (List<Map<String, Object>>) body.get("topProducts");
+            assertThat(products.get(0)).containsEntry("totalRevenue", 500L);
+        }
+
+        @Test
+        @DisplayName("✅ หน้าร้าน (ไม่ใช่แอดมิน) → เห็นสินค้าขายดี แต่ไม่เห็นยอดขาย")
+        void public_hidesRevenue() {
+            OrderStatsService.TopProduct top = new OrderStatsService.TopProduct(
+                    "Cake", "1 ปอนด์", "cake", 5L, 500L, 3L);
+            when(orderStatsService.getTopProducts("7"))
+                    .thenReturn(new OrderStatsService.TopProductsResult(
+                            List.of(top), 1000L, 10L, 5L, 1));
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) controller.topProducts("7", null).getBody();
+
+            assertThat(body).doesNotContainKey("totalAllRevenue");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> products = (List<Map<String, Object>>) body.get("topProducts");
+            assertThat(products.get(0)).containsEntry("productName", "Cake").doesNotContainKey("totalRevenue");
         }
 
         @Test
@@ -588,48 +782,6 @@ class OrderControllerTest {
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             verify(orderStatsService).getTopProducts("all");
-        }
-    }
-
-    // ═════════════════════════════════════════════════════════════════
-    @Nested
-    @DisplayName("isAdmin() helper")
-    class IsAdminTests {
-
-        @Test
-        @DisplayName("Token = admin role + adminRepo exists → true")
-        void valid_admin_true() {
-            when(jwtService.isAdmin(ADMIN_AUTH)).thenReturn(true);
-            when(jwtService.getUserIdFromHeader(ADMIN_AUTH)).thenReturn(1L);
-            when(adminRepository.existsById(1L)).thenReturn(true);
-
-            assertThat(controller.isAdmin(ADMIN_AUTH)).isTrue();
-        }
-
-        @Test
-        @DisplayName("✅ Token = admin role + adminRepo NOT exists → false (stale token)")
-        void adminRoleButDeleted_false() {
-            when(jwtService.isAdmin(anyString())).thenReturn(true);
-            when(jwtService.getUserIdFromHeader(anyString())).thenReturn(99L);
-            when(adminRepository.existsById(99L)).thenReturn(false);
-
-            assertThat(controller.isAdmin("Bearer stale")).isFalse();
-        }
-
-        @Test
-        @DisplayName("Token = user role → false")
-        void userRole_false() {
-            when(jwtService.isAdmin(anyString())).thenReturn(false);
-
-            assertThat(controller.isAdmin("Bearer user")).isFalse();
-        }
-
-        @Test
-        @DisplayName("null auth → false (no NPE)")
-        void nullAuth_false() {
-            when(jwtService.isAdmin(null)).thenReturn(false);
-
-            assertThat(controller.isAdmin(null)).isFalse();
         }
     }
 }

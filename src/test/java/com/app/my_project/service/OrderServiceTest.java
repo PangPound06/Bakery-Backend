@@ -243,17 +243,17 @@ class OrderServiceTest {
     class UpdateStatusTests {
 
         @Test
-        @DisplayName("Update ทั้ง order + payment status")
+        @DisplayName("หน้าร้าน: update ทั้ง order + payment status")
         void updateBoth_savesBoth() {
             OrderEntity order = makeOrder(1L, "pending");
             order.setPaymentStatus("unpaid");
-            order.setOrderType("online");
+            order.setOrderType("pos");
             when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
             when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            boolean result = orderService.updateStatus(1L, "shipping", "paid");
+            OrderService.UpdateStatusResult result = orderService.updateStatus(1L, "shipping", "paid");
 
-            assertThat(result).isTrue();
+            assertThat(result).isEqualTo(OrderService.UpdateStatusResult.SUCCESS);
             ArgumentCaptor<OrderEntity> captor = ArgumentCaptor.forClass(OrderEntity.class);
             verify(orderRepository).save(captor.capture());
             assertThat(captor.getValue().getOrderStatus()).isEqualTo("shipping");
@@ -261,11 +261,39 @@ class OrderServiceTest {
         }
 
         @Test
-        @DisplayName("Order ไม่พบ → return false")
+        @DisplayName("Order ไม่พบ → NOT_FOUND")
         void notFound_returnsFalse() {
             when(orderRepository.findById(999L)).thenReturn(Optional.empty());
 
-            assertThat(orderService.updateStatus(999L, "shipping", null)).isFalse();
+            assertThat(orderService.updateStatus(999L, "shipping", null))
+                    .isEqualTo(OrderService.UpdateStatusResult.NOT_FOUND);
+            verify(orderRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("ยกเลิกผ่านทางนี้ไม่ได้ (ไม่คืน stock) → USE_CANCEL")
+        void cancelled_mustUseCancelEndpoint() {
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(makeOrder(1L, "pending")));
+
+            assertThat(orderService.updateStatus(1L, "cancelled", null))
+                    .isEqualTo(OrderService.UpdateStatusResult.USE_CANCEL);
+            verify(orderRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("ออนไลน์ยังไม่ได้เงิน: ตั้ง paid เอง / ยืนยัน / ส่งของ → PAYMENT_REQUIRED")
+        void onlineUnpaid_paymentRequired() {
+            OrderEntity order = makeOrder(1L, "pending");
+            order.setOrderType("online");
+            order.setPaymentStatus(PaymentStateService.AWAITING);
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+
+            assertThat(orderService.updateStatus(1L, "confirmed", "paid"))
+                    .isEqualTo(OrderService.UpdateStatusResult.PAYMENT_REQUIRED);
+            assertThat(orderService.updateStatus(1L, "confirmed", null))
+                    .isEqualTo(OrderService.UpdateStatusResult.PAYMENT_REQUIRED);
+            assertThat(orderService.updateStatus(1L, "shipping", null))
+                    .isEqualTo(OrderService.UpdateStatusResult.PAYMENT_REQUIRED);
             verify(orderRepository, never()).save(any());
         }
 
@@ -293,14 +321,16 @@ class OrderServiceTest {
         }
 
         @Test
-        @DisplayName("✅ online order + paid → ไม่ sync dine-in")
+        @DisplayName("✅ online order ที่จ่ายแล้ว → เดินสถานะต่อได้ และไม่ sync dine-in")
         void onlinePaid_doesNotSyncDineIn() {
-            OrderEntity order = makeOrder(1L, "completed");
+            OrderEntity order = makeOrder(1L, "confirmed");
             order.setOrderType("online");
+            order.setPaymentStatus("paid");
             when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
             when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            orderService.updateStatus(1L, null, "paid");
+            assertThat(orderService.updateStatus(1L, "preparing", "paid"))
+                    .isEqualTo(OrderService.UpdateStatusResult.SUCCESS);
 
             verifyNoInteractions(dineInOrderRepository);
         }
@@ -349,6 +379,28 @@ class OrderServiceTest {
             assertThat(result).isEqualTo(OrderService.CancelResult.ALREADY_DELIVERED);
             verify(stockService, never()).batchIncreaseStock(any());
             verify(orderRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("✅ ยกเลิกไปแล้ว → SUCCESS แต่ไม่คืน stock ซ้ำ")
+        void cancel_alreadyCancelled_doesNotRestoreTwice() {
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(makeOrder(1L, "cancelled")));
+
+            assertThat(orderService.cancelOrder(1L)).isEqualTo(OrderService.CancelResult.SUCCESS);
+            verifyNoInteractions(stockService);
+            verify(orderRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("✅ ลูกค้าแจ้งโอนแล้ว → AWAITING_VERIFICATION (แอดมินต้องตัดสินก่อน)")
+        void cancel_awaitingVerification_blocked() {
+            OrderEntity order = makeOrder(1L, "pending");
+            order.setPaymentStatus(PaymentStateService.VERIFYING);
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+
+            assertThat(orderService.cancelOrder(1L))
+                    .isEqualTo(OrderService.CancelResult.AWAITING_VERIFICATION);
+            verifyNoInteractions(stockService);
         }
 
         @Test

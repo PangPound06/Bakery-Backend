@@ -5,111 +5,143 @@ import com.google.zxing.WriterException;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.qrcode.QRCodeWriter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Locale;
 
+/**
+ * QR พร้อมเพย์ของร้าน (มาตรฐาน EMVCo / Thai QR Payment)
+ *
+ * ใช้สองที่: หน้า POS ของแอดมิน และการโอนพร้อมเพย์ที่แอดมินยืนยันเอง
+ * เงินเข้าบัญชีพร้อมเพย์ของร้านตรง ไม่ผ่าน Stripe
+ *
+ * เลขพร้อมเพย์อ่านจาก promptpay.id (env PROMPTPAY_ID) — ตั้งผิดรูปแบบแอปจะไม่ยอมเริ่ม
+ * ดีกว่าปล่อยให้ลูกค้าสแกน QR ที่โอนไม่ได้
+ */
 @Service
 public class QRCodeService {
 
-    // เบอร์ PromptPay ของคุณ (เบอร์โทร 10 หลัก หรือ เลขบัตรประชาชน 13 หลัก)
-    private static final String PROMPTPAY_ID = "0931253748"; // ← ใส่เบอร์ของคุณ
+    private static final String PROMPTPAY_AID = "A000000677010111";
+    private static final String CURRENCY_THB = "764";
+    private static final String COUNTRY_TH = "TH";
+    /** มีจำนวนเงิน = QR ใช้ครั้งเดียว (dynamic) / ไม่มี = QR ถาวร (static) */
+    private static final String INITIATION_DYNAMIC = "12";
+    private static final String INITIATION_STATIC = "11";
+    private static final int QR_SIZE_PX = 300;
+
+    private final String promptPayId;
+    private final String accountName;
+
+    public QRCodeService(
+            @Value("${promptpay.id}") String promptPayId,
+            @Value("${promptpay.account-name:}") String accountName) {
+        this.promptPayId = normalizeId(promptPayId);
+        this.accountName = accountName == null ? "" : accountName.trim();
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    // PAYLOAD
+    // ═════════════════════════════════════════════════════════════════
 
     /**
-     * สร้าง PromptPay Payload
-     * ตาม EMVCo QR Code Specification
+     * ข้อความใน QR ตามมาตรฐาน EMVCo
+     *
+     * @param amount ยอดเงินบาท — 0 หรือน้อยกว่า = QR ไม่ระบุยอด ให้ผู้โอนกรอกเอง
      */
     public String generatePromptPayPayload(double amount) {
-        String promptPayId = PROMPTPAY_ID;
-        
-        // สร้าง Payload ตาม PromptPay Specification
-        StringBuilder payload = new StringBuilder();
-        
-        // Payload Format Indicator
-        payload.append("000201");
-        
-        // Point of Initiation Method (12 = Dynamic QR)
-        payload.append("010212");
-        
-        // Merchant Account Information (PromptPay)
-        String merchantInfo = buildMerchantInfo(promptPayId);
-        payload.append("29").append(String.format("%02d", merchantInfo.length())).append(merchantInfo);
-        
-        // Transaction Currency (764 = THB)
-        payload.append("5303764");
-        
-        // Transaction Amount
-        if (amount > 0) {
-            String amountStr = String.format("%.2f", amount);
-            payload.append("54").append(String.format("%02d", amountStr.length())).append(amountStr);
+        boolean hasAmount = amount > 0;
+
+        StringBuilder payload = new StringBuilder()
+                .append(tlv("00", "01"))
+                .append(tlv("01", hasAmount ? INITIATION_DYNAMIC : INITIATION_STATIC))
+                .append(tlv("29", merchantAccount()))
+                .append(tlv("53", CURRENCY_THB));
+        if (hasAmount) {
+            payload.append(tlv("54", formatAmount(amount)));
         }
-        
-        // Country Code
-        payload.append("5802TH");
-        
-        // CRC (จะคำนวณทีหลัง)
-        payload.append("6304");
-        
-        // คำนวณ CRC16
-        String crc = calculateCRC16(payload.toString());
-        
-        return payload.toString() + crc;
+        payload.append(tlv("58", COUNTRY_TH))
+                .append("6304"); // CRC คำนวณรวมแท็กและความยาวของตัวเองด้วย
+
+        return payload + crc16(payload.toString());
     }
-    
-    private String buildMerchantInfo(String promptPayId) {
-        StringBuilder info = new StringBuilder();
-        
-        // Application ID (PromptPay)
-        info.append("0016A000000677010111");
-        
-        if (promptPayId.length() == 10) {
-            // ✅ เบอร์โทร 10 หลัก → แปลงเป็น 0066XXXXXXXXX (13 หลัก)
-            // ตัด 0 นำหน้าออก แล้วเพิ่ม 0066
-            String formattedPhone = "0066" + promptPayId.substring(1);
-            info.append("01").append(String.format("%02d", formattedPhone.length())).append(formattedPhone);
-        } else if (promptPayId.length() == 13) {
-            // ✅ เลขบัตรประชาชน 13 หลัก → ใช้ตรงๆ
-            info.append("02").append(String.format("%02d", promptPayId.length())).append(promptPayId);
-        }
-        
-        return info.toString();
+
+    /** รูป PNG ของ QR เป็น Base64 (ไม่มี prefix data:) */
+    public String generateQRCodeBase64(double amount) throws WriterException, IOException {
+        BitMatrix matrix = new QRCodeWriter().encode(
+                generatePromptPayPayload(amount), BarcodeFormat.QR_CODE, QR_SIZE_PX, QR_SIZE_PX);
+
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        MatrixToImageWriter.writeToStream(matrix, "PNG", png);
+        return Base64.getEncoder().encodeToString(png.toByteArray());
     }
-    
-    private String calculateCRC16(String data) {
+
+    // ═════════════════════════════════════════════════════════════════
+    // DISPLAY
+    // ═════════════════════════════════════════════════════════════════
+
+    /** เลขพร้อมเพย์แบบซ่อนบางส่วน ให้ลูกค้าเทียบกับที่แอปธนาคารแสดงได้ เช่น xxxxxx3748 */
+    public String maskedPromptPayId() {
+        int visible = 4;
+        return "x".repeat(promptPayId.length() - visible) + promptPayId.substring(promptPayId.length() - visible);
+    }
+
+    /** ชื่อบัญชีที่ลูกค้าจะเห็นในแอปธนาคาร (ว่างได้) */
+    public String accountName() {
+        return accountName;
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ═════════════════════════════════════════════════════════════════
+
+    /** แท็กย่อย 01 = เบอร์มือถือ, 02 = เลขบัตรประชาชน/ผู้เสียภาษี, 03 = e-Wallet */
+    private String merchantAccount() {
+        String account = switch (promptPayId.length()) {
+            case 10 -> tlv("01", "0066" + promptPayId.substring(1));
+            case 13 -> tlv("02", promptPayId);
+            default -> tlv("03", promptPayId);
+        };
+        return tlv("00", PROMPTPAY_AID) + account;
+    }
+
+    private static String tlv(String tag, String value) {
+        return tag + String.format(Locale.ROOT, "%02d", value.length()) + value;
+    }
+
+    /** ทศนิยม 2 ตำแหน่งเสมอ ไม่ขึ้นกับ locale ของเครื่อง (บางภาษาใช้ , แทน .) */
+    private static String formatAmount(double amount) {
+        return BigDecimal.valueOf(amount).setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /** CRC-16/CCITT-FALSE (init 0xFFFF, poly 0x1021) ตามที่ EMVCo กำหนด */
+    private static String crc16(String data) {
         int crc = 0xFFFF;
-        int polynomial = 0x1021;
-        
-        byte[] bytes = data.getBytes();
-        for (byte b : bytes) {
+        for (byte b : data.getBytes(StandardCharsets.US_ASCII)) {
+            crc ^= (b & 0xFF) << 8;
             for (int i = 0; i < 8; i++) {
-                boolean bit = ((b >> (7 - i) & 1) == 1);
-                boolean c15 = ((crc >> 15 & 1) == 1);
-                crc <<= 1;
-                if (c15 ^ bit) {
-                    crc ^= polynomial;
-                }
+                crc = (crc & 0x8000) != 0 ? (crc << 1) ^ 0x1021 : crc << 1;
             }
         }
-        
-        crc &= 0xFFFF;
-        return String.format("%04X", crc);
+        return String.format(Locale.ROOT, "%04X", crc & 0xFFFF);
     }
 
     /**
-     * สร้าง QR Code เป็น Base64 Image
+     * รับเลขที่มีขีด/ช่องว่างได้ แต่ต้องเป็นตัวเลข 10 (มือถือ), 13 (บัตรประชาชน) หรือ 15 หลัก (e-Wallet)
      */
-    public String generateQRCodeBase64(double amount) throws WriterException, IOException {
-        String payload = generatePromptPayPayload(amount);
-        
-        QRCodeWriter qrCodeWriter = new QRCodeWriter();
-        BitMatrix bitMatrix = qrCodeWriter.encode(payload, BarcodeFormat.QR_CODE, 300, 300);
-        
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        MatrixToImageWriter.writeToStream(bitMatrix, "PNG", outputStream);
-        
-        byte[] qrCodeBytes = outputStream.toByteArray();
-        return Base64.getEncoder().encodeToString(qrCodeBytes);
+    static String normalizeId(String raw) {
+        String digits = raw == null ? "" : raw.replaceAll("[\\s-]", "");
+        boolean validLength = digits.length() == 10 || digits.length() == 13 || digits.length() == 15;
+        if (!digits.matches("\\d+") || !validLength || (digits.length() == 10 && !digits.startsWith("0"))) {
+            throw new IllegalStateException(
+                    "promptpay.id ต้องเป็นเบอร์มือถือ 10 หลัก เลขบัตรประชาชน 13 หลัก หรือ e-Wallet 15 หลัก");
+        }
+        return digits;
     }
 }

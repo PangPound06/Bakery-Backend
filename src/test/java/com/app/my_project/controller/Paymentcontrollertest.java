@@ -62,6 +62,19 @@ class PaymentControllerTest {
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         }
+
+        @Test
+        @DisplayName("amount ติดลบ / ศูนย์ / NaN / ตัวอักษร / เกินหลักล้าน → 400")
+        void generateQR_invalidAmount_returns400() {
+            for (Object amount : new Object[] { -1, 0, "NaN", "abc", 2_000_000 }) {
+                Map<String, Object> req = new HashMap<>();
+                req.put("amount", amount);
+
+                assertThat(controller.generatePromptPayQR(req).getStatusCode())
+                        .as("amount=%s", amount)
+                        .isEqualTo(HttpStatus.BAD_REQUEST);
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")

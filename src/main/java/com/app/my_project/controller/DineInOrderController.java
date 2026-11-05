@@ -1,5 +1,6 @@
 package com.app.my_project.controller;
 
+import com.app.my_project.common.PaymentMethods;
 import com.app.my_project.entity.DineInOrderEntity;
 import com.app.my_project.entity.DineInOrderItemEntity;
 import com.app.my_project.repository.DineInOrderRepository;
@@ -255,7 +256,7 @@ public class DineInOrderController {
             adminOrder.setSubtotal(grandSubtotal);
             adminOrder.setShipping(0.0);
             adminOrder.setTotal(grandTotal);
-            adminOrder.setPaymentMethod("qr_promptpay");
+            adminOrder.setPaymentMethod(PaymentMethods.QR_PROMPTPAY);
             // ✅ awaiting_payment เท่านั้น — webhook เป็นคนเดียวที่ตั้ง paid ได้
             adminOrder.setPaymentStatus("awaiting_payment");
             adminOrder.setOrderType("dine-in");

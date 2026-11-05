@@ -10,6 +10,8 @@
     { "name": "cloudinary.api-secret", "type": "java.lang.String", "description": "Cloudinary API secret." },
     { "name": "stripe.secret-key", "type": "java.lang.String", "description": "Stripe secret key (sk_test_... or sk_live_...). Blank disables payment endpoints." },
     { "name": "stripe.webhook-secret", "type": "java.lang.String", "description": "Signing secret (whsec_...) of the Stripe webhook endpoint." },
-    { "name": "stripe.currency", "type": "java.lang.String", "description": "Currency for PaymentIntents.", "defaultValue": "thb" }
+    { "name": "stripe.currency", "type": "java.lang.String", "description": "Currency for PaymentIntents.", "defaultValue": "thb" },
+    { "name": "promptpay.id", "type": "java.lang.String", "description": "Shop PromptPay ID (10-digit mobile, 13-digit citizen/tax ID or 15-digit e-wallet) for POS and admin-confirmed transfers." },
+    { "name": "promptpay.account-name", "type": "java.lang.String", "description": "Account name shown to customers next to the transfer QR. Optional." }
   ]
 }

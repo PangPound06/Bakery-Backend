@@ -65,6 +65,8 @@ class UserProfileControllerTest {
     private String tokenFor(Long userId) {
         return JWT.create()
                 .withSubject(userId.toString())
+                .withIssuer("auth0")
+                .withClaim("role", "USER")
                 .sign(Algorithm.HMAC256(JWT_SECRET));
     }
 
@@ -101,6 +103,21 @@ class UserProfileControllerTest {
             ResponseEntity<?> response = controller.getMyProfile(null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        }
+
+        @Test
+        @DisplayName("token แอดมิน (id ซ้ำกับลูกค้าได้) → 401 ไม่เปิดโปรไฟล์ลูกค้า")
+        void getMyProfile_adminToken_returns401() {
+            String adminToken = JWT.create()
+                    .withSubject("1")
+                    .withIssuer("auth0")
+                    .withClaim("role", "ADMIN")
+                    .sign(Algorithm.HMAC256(JWT_SECRET));
+
+            ResponseEntity<?> response = controller.getMyProfile("Bearer " + adminToken);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+            verifyNoInteractions(userProfileRepository);
         }
 
         @Test
