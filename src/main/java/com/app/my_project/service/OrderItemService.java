@@ -44,7 +44,21 @@ public class OrderItemService {
         ITEM_NOT_FOUND,
         ITEM_NOT_IN_ORDER,
         ORDER_LOCKED,        // delivered/cancelled — can't edit
-        ORDER_CANCELLED      // เมื่อลบ item สุดท้าย order ถูก cancel auto
+        ORDER_CANCELLED,     // เมื่อลบ item สุดท้าย order ถูก cancel auto
+
+        /**
+         * ✅ เพิ่มใหม่ — order ที่ชำระเงินแล้วห้ามแก้รายการผ่านทางนี้
+         *
+         * เมธอดในคลาสนี้แก้ quantity/price แล้วเขียน subtotal กับ total ใหม่
+         * ซึ่งเคยถูกต้องตอนระบบยังรับเงินสด แต่พอต่อ Stripe แล้ว
+         * ยอดใน DB กับเงินที่เก็บไปจริงจะไม่ตรงกันโดยไม่มีใครรู้
+         *
+         * เช่น เก็บลูกค้าไป 260 แล้วลบเค้กออก 1 ชิ้น total กลายเป็น 170
+         * แต่เงิน 90 บาทยังอยู่กับ Stripe ไม่มีการคืน
+         *
+         * ต้องไปทาง /api/cancel-requests ซึ่งคืนเงินจริงและบันทึกไว้ใน tb_refunds
+         */
+        PAID_REQUIRES_REFUND
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -61,6 +75,11 @@ public class OrderItemService {
         OrderEntity order = orderOpt.get();
         if (isLocked(order)) {
             return new AddItemResult(Result.ORDER_LOCKED, null, null);
+        }
+        // ✅ ปิดรู: เพิ่มของเข้า order ที่จ่ายเงินแล้ว = ร้านแถมของฟรี
+        //    เพราะยอดที่เก็บไปแล้วเพิ่มตามไม่ได้
+        if (isPaid(order)) {
+            return new AddItemResult(Result.PAID_REQUIRES_REFUND, null, null);
         }
 
         // แปลง display qty → raw qty
@@ -100,6 +119,8 @@ public class OrderItemService {
 
         OrderEntity order = orderOpt.get();
         if (isLocked(order)) return new UpdateQtyResult(Result.ORDER_LOCKED, null);
+        // ✅ ปิดรู: จ่ายเงินแล้วต้องผ่านระบบขอคืนเงิน
+        if (isPaid(order)) return new UpdateQtyResult(Result.PAID_REQUIRES_REFUND, null);
 
         Optional<OrderItemEntity> itemOpt = orderItemRepository.findById(itemId);
         if (itemOpt.isEmpty()) return new UpdateQtyResult(Result.ITEM_NOT_FOUND, null);
@@ -144,6 +165,8 @@ public class OrderItemService {
 
         OrderEntity order = orderOpt.get();
         if (isLocked(order)) return new RemoveItemResult(Result.ORDER_LOCKED, null);
+        // ✅ ปิดรู: จ่ายเงินแล้วต้องผ่านระบบขอคืนเงิน
+        if (isPaid(order)) return new RemoveItemResult(Result.PAID_REQUIRES_REFUND, null);
 
         Optional<OrderItemEntity> itemOpt = orderItemRepository.findById(itemId);
         if (itemOpt.isEmpty()) return new RemoveItemResult(Result.ITEM_NOT_FOUND, null);
@@ -182,6 +205,16 @@ public class OrderItemService {
     boolean isLocked(OrderEntity order) {
         return "delivered".equals(order.getOrderStatus())
                 || "cancelled".equals(order.getOrderStatus());
+    }
+
+    /**
+     * ✅ order ที่เก็บเงินลูกค้าไปแล้ว
+     *
+     * แก้รายการของ order แบบนี้ผ่านคลาสนี้ไม่ได้ เพราะจะทำให้ยอดใน DB
+     * ไม่ตรงกับเงินที่เก็บไปจริง ต้องผ่าน CancelRequestService ซึ่งคืนเงินด้วย
+     */
+    boolean isPaid(OrderEntity order) {
+        return "paid".equals(order.getPaymentStatus());
     }
 
     /** คำนวณ subtotal/total จาก items ปัจจุบันของ order */

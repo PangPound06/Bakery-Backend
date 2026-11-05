@@ -29,5 +29,8 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long>, JpaSp
 
     Optional<OrderEntity> findByOrdCode(String ordCode);
 
+    /** หา order ที่ยังไม่จ่ายของ user (awaiting_payment / expired / failed) */
+    List<OrderEntity> findByEmailAndPaymentStatus(String email, String paymentStatus);
+
     void deleteByEmail(String email);
 }

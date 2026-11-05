@@ -8,7 +8,10 @@ import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
 import com.app.my_project.repository.OrderRepository;
 import com.app.my_project.repository.OrderItemRepository;
+import com.app.my_project.common.ProductQuantityHelper;
 import com.app.my_project.service.JwtService;
+import com.app.my_project.service.PaymentStateService;
+import com.app.my_project.service.StripeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -33,13 +36,19 @@ public class DineInOrderController {
             DataSource dataSource,
             OrderRepository orderRepository,
             OrderItemRepository orderItemRepository,
-            JwtService jwtService) {
+            JwtService jwtService,
+            ProductQuantityHelper qtyHelper,
+            StripeService stripeService,
+            PaymentStateService paymentStateService) {
         this.dineInOrderRepository = dineInOrderRepository;
         this.dineInOrderItemRepository = dineInOrderItemRepository;
         this.dataSource = dataSource;
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.jwtService = jwtService;
+        this.qtyHelper = qtyHelper;
+        this.stripeService = stripeService;
+        this.paymentStateService = paymentStateService;
     }
 
     private static final Logger log = LoggerFactory.getLogger(DineInOrderController.class);
@@ -55,6 +64,12 @@ public class DineInOrderController {
     private final OrderItemRepository orderItemRepository;
 
     private final JwtService jwtService;
+
+    private final ProductQuantityHelper qtyHelper;
+
+    private final StripeService stripeService;
+
+    private final PaymentStateService paymentStateService;
 
     private static final int FRESH_STOCK_VALUE = 9999;
 
@@ -118,13 +133,21 @@ public class DineInOrderController {
                         orderItem.setImage(item.get("image") != null ? item.get("image").toString() : null);
                         dineInOrderItemRepository.save(orderItem);
 
+                        /*
+                         * ✅ stock เก็บเป็น "ชิ้น" แต่ quantity ที่ส่งมาเป็น "ออเดอร์"
+                         *    เค้ก 1 ปอนด์ = 8 ชิ้น ถ้าตัดตามตัวเลขที่ส่งมาตรงๆ
+                         *    จะตัดแค่ 1 ชิ้น ของเลยไม่เคยหมดจากระบบ
+                         */
+                        int rawQty = qtyHelper.toRawQty(quantity,
+                                orderItem.getSelectedOption());
+
                         String updateStockSql = "UPDATE tb_products " +
                                 "SET \"stockQuantity\" = GREATEST(\"stockQuantity\" - ?, 0), " +
                                 "    \"isAvailable\"   = (GREATEST(\"stockQuantity\" - ?, 0) > 0) " +
                                 "WHERE id = ? AND \"stockQuantity\" != " + FRESH_STOCK_VALUE;
                         try (PreparedStatement stockStmt = conn.prepareStatement(updateStockSql)) {
-                            stockStmt.setInt(1, quantity);
-                            stockStmt.setInt(2, quantity);
+                            stockStmt.setInt(1, rawQty);
+                            stockStmt.setInt(2, rawQty);
                             stockStmt.setLong(3, productId);
                             stockStmt.executeUpdate();
                         }
@@ -144,27 +167,35 @@ public class DineInOrderController {
         }
     }
 
-    // ✅ ลูกค้าส่งสลิปชำระเงิน
+    /**
+     * ลูกค้ากดเรียกเก็บบิล → ออก QR ของ Stripe
+     *
+     * ═══ เปลี่ยนจากอัปสลิปมาเป็น PromptPay ของ Stripe ═══
+     * ของเดิมรับรูปสลิปมาเก็บแล้วรอพนักงานเปิดดูด้วยตา ระบบไม่รู้เลยว่าเงินเข้าจริงไหม
+     * และบิลหน้าร้านจะไม่มี PaymentIntent ทำให้คืนเงินผ่านระบบเดียวกับออนไลน์ไม่ได้
+     *
+     * ตอนนี้ใช้ท่อเดียวกับหน้า checkout ทั้งหมด — webhook เป็นคนยืนยันว่าจ่ายแล้ว
+     * ไม่มีใครตั้ง paid เองได้ และบิลจะคืนเงินผ่าน RefundService ได้ทันที
+     *
+     * ═══ ยังไม่ตัด stock ตรงนี้ ═══
+     * ของถูกตัดไปตอนลูกค้าสั่งที่โต๊ะแล้ว (ดู createOrder ข้างบน) และกินไปเรียบร้อย
+     * บิลนี้เป็นแค่การเก็บเงิน ไม่ใช่การจอง จึงไม่จอง stock ซ้ำ
+     */
     @PostMapping("/request-bill")
+    @Transactional
     public ResponseEntity<?> requestBill(@RequestBody Map<String, Object> request) {
         Map<String, Object> response = new HashMap<>();
         try {
             String email = org.springframework.security.core.context.SecurityContextHolder
                     .getContext().getAuthentication().getName();
 
-            String slipImage = (String) request.get("slipImage");
             String tableNo = (String) request.get("tableNo");
 
-            // ✅ FIX #2: ใช้ getActiveOrders filter วันนี้ + โต๊ะ แทนดึงทั้งหมด
             List<DineInOrderEntity> activeOrders = getActiveOrders(email, tableNo);
 
-            // ✅ FIX #6: รวมเฉพาะออเดอร์ที่ completed เท่านั้น
             List<DineInOrderEntity> completedOrders = new ArrayList<>();
             for (DineInOrderEntity order : activeOrders) {
                 if ("completed".equals(order.getOrderStatus())) {
-                    order.setSlipImage(slipImage);
-                    order.setPaymentStatus("pending_verify");
-                    dineInOrderRepository.save(order);
                     completedOrders.add(order);
                 }
             }
@@ -173,6 +204,24 @@ public class DineInOrderController {
                 response.put("success", false);
                 response.put("message", "ไม่มีออเดอร์ที่เสร็จแล้วสำหรับเรียกเก็บเงิน");
                 return ResponseEntity.badRequest().body(response);
+            }
+
+            /*
+             * ─── กดเรียกบิลซ้ำ ใช้แถวเดิมเขียนทับ ───
+             *
+             * เดิมปล่อยใบเก่าทิ้งแล้วสร้างใบใหม่ทุกครั้ง กดสามรอบได้สามแถว
+             * เปลืองเลข order และทิ้งแถว expired ที่ไม่เคยมีเงินไหลผ่านไว้เต็มตาราง
+             *
+             * ตรรกะเดียวกับ PaymentStateService.prepareForNewIntent ฝั่งออนไลน์
+             * แถวที่ยังไม่จ่ายของโต๊ะนี้มีได้แถวเดียวเท่านั้น
+             */
+            OrderEntity reusable = findReusableBill(email);
+            if (reusable != null) {
+                // QR เดิมต้องตาย ไม่งั้นลูกค้ามีสอง QR ที่จ่ายได้ทั้งคู่
+                if (reusable.getStripePaymentIntentId() != null) {
+                    stripeService.cancelIntent(reusable.getStripePaymentIntentId());
+                }
+                orderItemRepository.deleteByOrderId(reusable.getId());
             }
 
             Double buffetPricePerPerson = request.get("buffetPrice") != null
@@ -194,31 +243,49 @@ public class DineInOrderController {
 
             String billTableNo = completedOrders.get(0).getTableNo();
 
-            OrderEntity adminOrder = new OrderEntity();
+            OrderEntity adminOrder = (reusable != null) ? reusable : new OrderEntity();
             adminOrder.setEmail(email);
             adminOrder.setSubtotal(grandSubtotal);
             adminOrder.setShipping(0.0);
             adminOrder.setTotal(grandTotal);
             adminOrder.setPaymentMethod("qr_promptpay");
-            adminOrder.setPaymentStatus("pending");
+            // ✅ awaiting_payment เท่านั้น — webhook เป็นคนเดียวที่ตั้ง paid ได้
+            adminOrder.setPaymentStatus("awaiting_payment");
             adminOrder.setOrderType("dine-in");
             adminOrder.setOrderStatus("pending");
+
             String dineType = request.get("dineType") != null ? request.get("dineType").toString() : "alacarte";
+
+            adminOrder.setDineType(dineType);
+            if ("buffet".equals(dineType)) {
+                adminOrder.setBuffetPax(buffetPax);
+                adminOrder.setBuffetPricePerPerson(buffetPricePerPerson);
+            }
+
             String noteText = "โต๊ะ " + billTableNo;
             if ("buffet".equals(dineType)) {
                 noteText += " | Buffet " + buffetPax + " คน";
             }
             adminOrder.setNote(noteText);
-            adminOrder.setSlipImage(slipImage);
+            adminOrder.setStripePaymentIntentId(null);
             adminOrder.setCreatedAt(LocalDateTime.now());
             OrderEntity savedAdminOrder = orderRepository.save(adminOrder);
 
-            String ordCode = "ORD" + String.format("%06d", savedAdminOrder.getId() * 104729L % 1000000L)
-                    + savedAdminOrder.getId();
-            savedAdminOrder.setOrdCode(ordCode);
-            orderRepository.save(savedAdminOrder);
+            // เลขบิลคงเดิมถ้าเป็นแถวที่ใช้ซ้ำ ลูกค้าจะได้ไม่งงว่าทำไมเลขเปลี่ยน
+            String ordCode = savedAdminOrder.getOrdCode();
+            if (ordCode == null || ordCode.isBlank()) {
+                ordCode = "ORD" + String.format("%06d", savedAdminOrder.getId() * 104729L % 1000000L)
+                        + savedAdminOrder.getId();
+                savedAdminOrder.setOrdCode(ordCode);
+                orderRepository.save(savedAdminOrder);
+            }
 
+            // ─── ผูกออเดอร์โต๊ะเข้ากับบิล แล้วคัดลอกรายการไปไว้ใน tb_order_items ───
             for (DineInOrderEntity order : completedOrders) {
+                order.setBillOrderId(savedAdminOrder.getId());
+                order.setPaymentStatus("awaiting_payment");
+                dineInOrderRepository.save(order);
+
                 List<DineInOrderItemEntity> items = dineInOrderItemRepository.findByOrderId(order.getId());
                 for (DineInOrderItemEntity item : items) {
                     OrderItemEntity orderItem = new OrderItemEntity();
@@ -226,21 +293,131 @@ public class DineInOrderController {
                     orderItem.setProductId(item.getProductId());
                     orderItem.setProductName(item.getProductName());
                     orderItem.setPrice(item.getPrice());
-                    orderItem.setQuantity(item.getQuantity());
+                    /*
+                     * ✅ tb_order_items ทั้งระบบเก็บ quantity เป็น "ชิ้น"
+                     *    ฝั่งออนไลน์เก็บ 8 สำหรับเค้ก 1 ปอนด์ แต่ฝั่งโต๊ะเก็บ 1
+                     *    ถ้าคัดลอกมาตรงๆ splitQty() ที่หน้าเว็บจะหาร 8 ได้ 0
+                     *    แล้วโชว์ว่ารายการนั้นถูกยกเลิกทั้งที่ลูกค้าจ่ายเต็ม
+                     */
+                    orderItem.setQuantity(qtyHelper.toRawQty(
+                            item.getQuantity(), item.getSelectedOption()));
                     orderItem.setSelectedOption(item.getSelectedOption());
                     orderItem.setImage(item.getImage());
                     orderItemRepository.save(orderItem);
                 }
             }
 
+            // ─── ออก QR ───
+            StripeService.PromptPayQr qr = stripeService.createPromptPayIntent(
+                    savedAdminOrder, grandTotal, email);
+
+            savedAdminOrder.setStripePaymentIntentId(qr.paymentIntentId());
+            orderRepository.save(savedAdminOrder);
+
             response.put("success", true);
-            response.put("message", "ส่งสลิปเรียบร้อยแล้ว");
+            response.put("orderId", savedAdminOrder.getId());
+            response.put("ordCode", ordCode);
+            response.put("amount", grandTotal);
+            response.put("qrImageUrl", qr.qrImageUrl());
+            response.put("hostedInstructionsUrl",
+                    qr.hostedInstructionsUrl() == null ? "" : qr.hostedInstructionsUrl());
+            response.put("paymentIntentId", qr.paymentIntentId());
+            response.put("testMode", stripeService.isTestMode());
             return ResponseEntity.ok(response);
+
         } catch (Exception e) {
+            log.error("เรียกเก็บบิลไม่สำเร็จ", e);
             response.put("success", false);
-            response.put("message", e.getMessage());
+            response.put("message", "เรียกเก็บบิลไม่สำเร็จ กรุณาลองใหม่");
             return ResponseEntity.badRequest().body(response);
         }
+    }
+
+    /**
+     * หาบิลหน้าร้านของลูกค้าคนนี้ที่ยังไม่จ่าย เพื่อเอามาเขียนทับ
+     *
+     * ═══ ทำไมไม่ดูจาก bill_order_id ═══
+     * ตอนกดยกเลิกการชำระเงิน ระบบปลดล็อกออเดอร์โต๊ะเพื่อให้เรียกบิลใหม่ได้
+     * รอบก่อนผมล้าง bill_order_id ทิ้งไปด้วย เส้นเชื่อมจึงขาด
+     * พอกดเรียกบิลใหม่ก็หาแถวเดิมไม่เจอ แล้วสร้างแถวใหม่ทุกครั้ง
+     *
+     * ค้นจาก email + order_type + สถานะที่ยังไม่จ่ายแทน ไม่ต้องพึ่งเส้นเชื่อม
+     * ตรรกะเดียวกับ PaymentStateService.prepareForNewIntent ฝั่งออนไลน์
+     *
+     * กดยกเลิกกี่ร้อยครั้งก็ยังเป็นแถวเดิมแถวเดียว
+     */
+    private OrderEntity findReusableBill(String email) {
+        List<OrderEntity> unpaid = new ArrayList<>();
+        unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, "awaiting_payment"));
+        unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, "expired"));
+        unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, "failed"));
+
+        OrderEntity latest = null;
+        for (OrderEntity o : unpaid) {
+            if (!"dine-in".equals(o.getOrderType()))
+                continue;
+            if (latest == null || o.getId() > latest.getId()) {
+                latest = o;
+            }
+        }
+        return latest;
+    }
+
+    /**
+     * ลูกค้ากดยกเลิกการชำระเงิน หรือปิดหน้าไปเอง
+     *
+     * ปล่อยบิลคืนแล้วยกเลิก QR กับ Stripe ออเดอร์โต๊ะจะถูกปลดล็อกให้กดเรียกบิลใหม่ได้
+     * stock ไม่ถูกคืน เพราะของกินไปแล้ว (ดู PaymentStateService.restoreStock)
+     */
+    @PostMapping("/bill/cancel/{orderId}")
+    public ResponseEntity<?> cancelBill(@PathVariable Long orderId) {
+        String email = org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication().getName();
+
+        Optional<OrderEntity> opt = orderRepository.findById(orderId);
+        if (opt.isEmpty() || !opt.get().getEmail().equals(email)) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("success", false, "message", "ไม่พบบิล"));
+        }
+
+        OrderEntity bill = opt.get();
+        if ("paid".equals(bill.getPaymentStatus())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "บิลนี้ชำระเงินแล้ว"));
+        }
+
+        String intentId = bill.getStripePaymentIntentId();
+        paymentStateService.releaseOrder(orderId, "expired", "ลูกค้ายกเลิกการชำระเงิน");
+        if (intentId != null && !intentId.isBlank()) {
+            stripeService.cancelIntent(intentId);
+        }
+
+        return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    /**
+     * หน้าบิล poll ถามสถานะ — อย่าเชื่อฝั่ง client ว่าจ่ายแล้ว
+     *
+     * ตัวเดียวที่เปลี่ยนสถานะเป็น paid ได้คือ webhook
+     */
+    @GetMapping("/bill/status/{orderId}")
+    public ResponseEntity<?> billStatus(@PathVariable Long orderId) {
+        String email = org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication().getName();
+
+        Optional<OrderEntity> opt = orderRepository.findById(orderId);
+        if (opt.isEmpty() || !opt.get().getEmail().equals(email)) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("success", false, "message", "ไม่พบบิล"));
+        }
+
+        OrderEntity bill = opt.get();
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "orderId", bill.getId(),
+                "ordCode", bill.getOrdCode() == null ? "" : bill.getOrdCode(),
+                "paymentStatus", bill.getPaymentStatus() == null ? "" : bill.getPaymentStatus(),
+                "paid", "paid".equals(bill.getPaymentStatus())));
     }
 
     // ✅ User ดูออเดอร์ของตัวเอง
@@ -380,8 +557,16 @@ public class DineInOrderController {
                         String restoreStockSql = "UPDATE tb_products " +
                                 "SET \"stockQuantity\" = \"stockQuantity\" + ?, \"isAvailable\" = true " +
                                 "WHERE id = ? AND \"stockQuantity\" != " + FRESH_STOCK_VALUE;
+                        /*
+                         * ✅ คืนเป็น "ชิ้น" ให้ตรงกับที่ตัดไปตอนสั่ง
+                         *    ตอนสั่งตัด 8 ชิ้นสำหรับเค้ก 1 ปอนด์ ถ้าคืนแค่ 1
+                         *    ของจะหายจากระบบ 7 ชิ้นทุกครั้งที่ยกเลิก
+                         */
+                        int restoreQty = qtyHelper.toRawQty(
+                                item.getQuantity(), item.getSelectedOption());
+
                         try (PreparedStatement stmt = conn.prepareStatement(restoreStockSql)) {
-                            stmt.setInt(1, item.getQuantity());
+                            stmt.setInt(1, restoreQty);
                             stmt.setLong(2, item.getProductId());
                             stmt.executeUpdate();
                         }

@@ -21,21 +21,54 @@ import java.util.Map;
 @Service
 public class OrderStatsService {
 
+    /**
+     * นับเฉพาะของที่ขายได้จริง
+     *
+     * ╔══ remaining คืออะไร ══╗
+     * tb_order_items.quantity คือจำนวนที่สั่งตอนแรก ไม่ลดตามการยกเลิก
+     * ของที่คืนเงินไปแล้วอยู่ใน cancelled_qty จึงต้องหักออกก่อนนับ
+     * ไม่งั้นเค้กที่คืนเงินไปแล้วจะยังขึ้นอันดับสินค้าขายดีอยู่
+     *
+     * ╔══ ทำไมหารด้วย CASE ══╗
+     * quantity เก็บเป็น "ชิ้น" แต่ price เป็นราคาต่อ 1 ออเดอร์
+     * order_items_total ที่เอาไปหารสัดส่วนรายได้จึงต้องคิดเป็นออเดอร์เหมือนกัน
+     * ไม่งั้นเค้กปอนด์จะกินสัดส่วนไป 8–16 เท่า แล้วรายได้ของสินค้าอื่นในบิลเดียวกันจะหาย
+     *
+     * ตัวคูณต้องตรงกับ ProductQuantityHelper — แก้ที่นี่ต้องแก้ที่นั่นด้วย
+     */
+    private static final String QTY_MULTIPLIER_SQL =
+            "CASE WHEN oi.selected_option LIKE '%2 ปอนด์%' THEN 16 " +
+            "     WHEN oi.selected_option LIKE '%1 ปอนด์%' THEN 8 " +
+            "     ELSE 1 END";
+
+    private static final String REMAINING_RAW_SQL =
+            "GREATEST(oi.quantity - COALESCE(oi.cancelled_qty, 0), 0)";
+
     private static final String TOP_PRODUCTS_SQL =
-            "SELECT oi.product_name, oi.price, oi.quantity, oi.selected_option, " +
+            "WITH line AS ( " +
+            "  SELECT oi.order_id, oi.product_id, oi.product_name, oi.price, oi.selected_option, " +
+            "         " + REMAINING_RAW_SQL + " AS remaining_raw, " +
+            "         " + REMAINING_RAW_SQL + " / (" + QTY_MULTIPLIER_SQL + ") AS remaining_units " +
+            "  FROM tb_order_items oi " +
+            ") " +
+            "SELECT line.product_name, line.price, line.selected_option, " +
+            "  line.remaining_raw AS quantity, " +
             "  o.created_at, o.subtotal, " +
             "  COALESCE(p.category, 'unknown') as category, " +
             // ✅ window function — คำนวณ order_items_total ต่อ order ใน pass เดียว
             //    (แทน correlated subquery ที่รันซ้ำต่อแถว)
-            "  SUM(oi.price * oi.quantity) OVER (PARTITION BY oi.order_id) as order_items_total " +
-            "FROM tb_order_items oi " +
-            "JOIN tb_orders o ON oi.order_id = o.id " +
-            "LEFT JOIN tb_products p ON oi.product_id = p.id " +
+            "  SUM(line.price * line.remaining_units) OVER (PARTITION BY line.order_id) as order_items_total " +
+            "FROM line " +
+            "JOIN tb_orders o ON line.order_id = o.id " +
+            "LEFT JOIN tb_products p ON line.product_id = p.id " +
             "WHERE ( " +
             "  (o.order_type = 'pos' AND o.order_status != 'cancelled') " +
             "  OR " +
-            "  (o.order_status IN ('confirmed', 'preparing', 'shipping', 'delivered')) " +
+            // cancel_requested นับด้วย — ยังไม่มีใครคืนเงิน ถ้าตัดออกตัวเลขจะกระพริบตอนแอดมินปฏิเสธ
+            "  (o.order_status IN ('confirmed', 'preparing', 'shipping', 'delivered', 'cancel_requested')) " +
             ") " +
+            // ของที่ยกเลิกหมดทั้งรายการแล้ว ตัดทิ้งไปเลย ไม่งั้น orderCount จะนับเกิน
+            "AND line.remaining_units > 0 " +
             // ✅ กรองช่วงวันใน SQL — days=7/30 จะสแกนเฉพาะช่วงที่ต้องการ
             "AND o.created_at >= ?";
 
@@ -77,8 +110,9 @@ public class OrderStatsService {
             double orderItemsTotal = oitObj != null ? ((Number) oitObj).doubleValue() : 0.0;
 
             int displayQty = qtyHelper.toDisplayQty(quantity, selectedOption);
-            double itemRaw = price * quantity;
-            double ratio = orderItemsTotal > 0 ? itemRaw / orderItemsTotal : 0;
+            // มูลค่าของบรรทัดนี้ — ต้องคิดเป็น "ออเดอร์" ให้ตรงหน่วยกับ order_items_total
+            double itemValue = price * displayQty;
+            double ratio = orderItemsTotal > 0 ? itemValue / orderItemsTotal : 0;
             long revenue = (long) (orderSubtotal * ratio);
 
             String key = productName + "|||"

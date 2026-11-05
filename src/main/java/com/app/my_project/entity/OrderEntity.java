@@ -52,6 +52,27 @@ public class OrderEntity {
     @Column(name = "order_status")
     private String orderStatus;
 
+    /**
+     * บิลหน้าร้านเป็น alacarte หรือ buffet
+     *
+     * เดิมแยกด้วยการค้นคำว่า "Buffet" ใน note ซึ่งเป็นช่องข้อความอิสระ
+     * แอดมินพิมพ์คำนี้ลงบิลธรรมดาเมื่อไหร่ รายงานจะนับผิดทันที
+     */
+    @Column(name = "dine_type")
+    private String dineType;
+
+    /** จำนวนคนของบิลบุฟเฟต์ */
+    @Column(name = "buffet_pax")
+    private Integer buffetPax;
+
+    /**
+     * ราคาบุฟเฟต์ต่อหัว ณ วันที่ขาย
+     *
+     * ต้องเก็บไว้ ไม่งั้นพอร้านขึ้นราคา บิลเก่าจะย้อนกลับไปคิดจำนวนคนไม่ได้อีก
+     */
+    @Column(name = "buffet_price_per_person")
+    private Double buffetPricePerPerson;
+
     @Column(name = "order_type")
     private String orderType;
 
@@ -74,6 +95,12 @@ public class OrderEntity {
 
     @Column(name = "card_last4", length = 4)
     private String cardLast4;
+
+    // ═══ Stripe ═══
+    // เก็บไว้เพื่อ (1) หา order กลับจาก webhook (2) ตามรอยใน Stripe Dashboard
+    // คอลัมน์สร้างจาก db/stripe-migration.sql (ddl-auto=none)
+    @Column(name = "stripe_payment_intent_id")
+    private String stripePaymentIntentId;
 
     // ===== Getters and Setters =====
     public Long getId() { return id; }
@@ -112,6 +139,15 @@ public class OrderEntity {
     public String getOrderType() { return orderType; }
     public void setOrderType(String orderType) { this.orderType = orderType; }
 
+    public String getDineType() { return dineType; }
+    public void setDineType(String dineType) { this.dineType = dineType; }
+
+    public Integer getBuffetPax() { return buffetPax; }
+    public void setBuffetPax(Integer buffetPax) { this.buffetPax = buffetPax; }
+
+    public Double getBuffetPricePerPerson() { return buffetPricePerPerson; }
+    public void setBuffetPricePerPerson(Double v) { this.buffetPricePerPerson = v; }
+
     public String getReceiverName() { return receiverName; }
     public void setReceiverName(String receiverName) { this.receiverName = receiverName; }
 
@@ -132,4 +168,7 @@ public class OrderEntity {
 
     public String getCardLast4() { return cardLast4; }
     public void setCardLast4(String cardLast4) { this.cardLast4 = cardLast4; }
+
+    public String getStripePaymentIntentId() { return stripePaymentIntentId; }
+    public void setStripePaymentIntentId(String stripePaymentIntentId) { this.stripePaymentIntentId = stripePaymentIntentId; }
 }

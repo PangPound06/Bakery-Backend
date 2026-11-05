@@ -11,6 +11,8 @@ import com.app.my_project.service.JwtService;
 import com.app.my_project.service.OrderItemService;
 import com.app.my_project.service.OrderService;
 import com.app.my_project.service.OrderStatsService;
+import com.app.my_project.service.RefundService;
+import com.app.my_project.service.StripeService;
 import com.app.my_project.service.StockService;
 import com.app.my_project.service.StoreSettingService;
 import org.springframework.http.ResponseEntity;
@@ -62,6 +64,7 @@ public class OrderController {
     private final AdminRepository adminRepository;
     private final StoreSettingService storeSettingService;
     private final UserRepository userRepository;
+    private final RefundService refundService;
 
     public OrderController(OrderService orderService,
             OrderItemService orderItemService,
@@ -71,7 +74,8 @@ public class OrderController {
             JwtService jwtService,
             AdminRepository adminRepository,
             StoreSettingService storeSettingService,
-            UserRepository userRepository) {
+            UserRepository userRepository,
+            RefundService refundService) {
         this.orderService = orderService;
         this.orderItemService = orderItemService;
         this.orderStatsService = orderStatsService;
@@ -81,22 +85,55 @@ public class OrderController {
         this.adminRepository = adminRepository;
         this.storeSettingService = storeSettingService;
         this.userRepository = userRepository;
+        this.refundService = refundService;
     }
 
     // ═════════════════════════════════════════════════════════════════
     // CREATE
     // ═════════════════════════════════════════════════════════════════
 
+    /**
+     * ═══════════════════════════════════════════════════════════════
+     * ⚠️ endpoint นี้เหลือไว้สำหรับ POS ของแอดมินเท่านั้น
+     *
+     * ลูกค้าที่ชำระเงินจริงต้องไปทาง POST /api/checkout/session แทน
+     * (ดู CheckoutController) เพราะที่นั่นราคาถูกคำนวณฝั่ง server
+     *
+     * ถ้าคนเรียกไม่ใช่แอดมิน:
+     * - email ถูกบังคับเป็นของเจ้าของ token ไม่ใช่ค่าใน body
+     * - paymentStatus ถูกบังคับเป็น "pending" เสมอ
+     * ตั้ง "paid" เองไม่ได้อีกต่อไป
+     * ═══════════════════════════════════════════════════════════════
+     */
     @PostMapping
     public ResponseEntity<?> createOrder(@RequestBody Map<String, Object> body,
             @RequestHeader(value = "Authorization", required = false) String auth) {
-        String email = (String) body.get("email");
+
+        boolean admin = isAdmin(auth);
+        String email;
+
+        if (admin) {
+            // แอดมินสร้างออเดอร์แทนลูกค้าได้ (หน้าขายหน้าร้าน)
+            email = (String) body.get("email");
+        } else {
+            // ลูกค้าทั่วไป — เอา email จาก token เท่านั้น
+            Long userId = jwtService.getUserIdFromHeader(auth);
+            if (userId == null)
+                return unauthorized();
+            email = userRepository.findById(userId).map(UserEntity::getEmail).orElse(null);
+        }
+
         if (email == null || email.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Email required"));
         }
 
         try {
             OrderService.CreateOrderRequest req = parseCreateRequest(body);
+
+            // ✅ ไม่ใช่แอดมิน → ห้ามตั้งสถานะจ่ายเงินเอง
+            if (!admin) {
+                req = forcePending(req);
+            }
 
             // กันสั่งออเดอร์ออนไลน์ตอนร้านปิดรับ (ไม่กระทบ pos / dine-in)
             if ("online".equalsIgnoreCase(req.orderType())
@@ -121,6 +158,22 @@ public class OrderController {
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    /**
+     * บังคับให้ออเดอร์ที่ลูกค้าสร้างเองเป็น "pending" เสมอ
+     * และล้างข้อมูลบัตรที่อาจแอบส่งมา
+     */
+    private OrderService.CreateOrderRequest forcePending(OrderService.CreateOrderRequest r) {
+        return new OrderService.CreateOrderRequest(
+                r.subtotal(), r.shipping(), r.total(),
+                r.paymentMethod(),
+                "pending", // ← ไม่ว่า client ส่งอะไรมา
+                null, // ← paymentId ต้องมาจาก payment gateway เท่านั้น
+                r.orderType(), r.orderStatus(), r.slipImage(),
+                null, null, // ← ไม่รับข้อมูลบัตรจาก client อีกต่อไป
+                r.receiverName(), r.receiverPhone(), r.receiverAddress(), r.note(),
+                r.items());
     }
 
     @SuppressWarnings("unchecked")
@@ -183,9 +236,12 @@ public class OrderController {
         List<Map<String, Object>> items = loadItems(id);
 
         // ✅ Frontend expects: { success, order, items }
+        Map<String, Object> orderMap = orderToMap(order, items);
+        orderMap.put("refundedAmount", refundedBaht(order.getId()));
+
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
-        response.put("order", orderToMap(order, items));
+        response.put("order", orderMap);
         response.put("items", items);
         return ResponseEntity.ok(response);
     }
@@ -211,9 +267,12 @@ public class OrderController {
         List<Map<String, Object>> items = loadItems(order.getId());
 
         // Frontend expects: { success, order, items }
+        Map<String, Object> orderMap = orderToMap(order, items);
+        orderMap.put("refundedAmount", refundedBaht(order.getId()));
+
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
-        response.put("order", orderToMap(order, items));
+        response.put("order", orderMap);
         response.put("items", items);
         return ResponseEntity.ok(response);
     }
@@ -265,6 +324,10 @@ public class OrderController {
             case NOT_FOUND -> ResponseEntity.notFound().build();
             case ALREADY_DELIVERED -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Cannot cancel delivered order"));
+            // ✅ order ที่จ่ายเงินแล้ว ต้องผ่านระบบขอคืนเงิน
+            case PAID_REQUIRES_REFUND -> ResponseEntity.status(409)
+                    .body(Map.of("error", "คำสั่งซื้อนี้ชำระเงินแล้ว ต้องดำเนินการผ่านระบบขอคืนเงิน (/api/cancel-requests)",
+                            "requiresRefund", true));
         };
     }
 
@@ -388,10 +451,22 @@ public class OrderController {
         m.put("quantity", item.getQuantity());
         m.put("selectedOption", item.getSelectedOption());
         m.put("image", image);
+        // ✅ หน้ายกเลิกบางรายการต้องรู้ว่าเหลือให้ยกเลิกได้อีกเท่าไหร่
+        m.put("cancelledQty", item.getCancelledQty());
         return m;
     }
 
     /** ดึง items ของ order เดียว (ใช้ใน endpoint รายตัว เช่น GET /{id}) */
+    /**
+     * ยอดที่คืนเงินไปแล้วของ order นี้ (บาท)
+     *
+     * อ่านจาก tb_refunds อย่างเดียว ไม่ได้ยิง Stripe จึงเรียกถี่ได้
+     * ใช้เฉพาะ endpoint รายละเอียด — หน้า list ไม่เรียก กัน N+1
+     */
+    private double refundedBaht(Long orderId) {
+        return StripeService.toBaht(refundService.refundedMinorUnit(orderId));
+    }
+
     private List<Map<String, Object>> loadItems(Long orderId) {
         List<Map<String, Object>> result = new ArrayList<>();
         for (OrderItemEntity item : orderItemRepository.findByOrderId(orderId)) {
@@ -493,6 +568,9 @@ public class OrderController {
             case ORDER_NOT_FOUND -> ResponseEntity.notFound().build();
             case ORDER_LOCKED -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Cannot modify delivered/cancelled order"));
+            case PAID_REQUIRES_REFUND -> ResponseEntity.status(409)
+                    .body(Map.of("error", "คำสั่งซื้อนี้ชำระเงินแล้ว ต้องดำเนินการผ่านระบบขอคืนเงิน (/api/cancel-requests)",
+                            "requiresRefund", true));
             default -> ResponseEntity.badRequest().body(Map.of("error", result.result().name()));
         };
     }
@@ -508,6 +586,9 @@ public class OrderController {
                     .body(Map.of("error", "Cannot modify delivered/cancelled order"));
             case ITEM_NOT_IN_ORDER -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Item does not belong to this order"));
+            case PAID_REQUIRES_REFUND -> ResponseEntity.status(409)
+                    .body(Map.of("error", "คำสั่งซื้อนี้ชำระเงินแล้ว ต้องดำเนินการผ่านระบบขอคืนเงิน (/api/cancel-requests)",
+                            "requiresRefund", true));
             default -> ResponseEntity.badRequest().body(Map.of("error", result.result().name()));
         };
     }
@@ -527,6 +608,9 @@ public class OrderController {
                     .body(Map.of("error", "Cannot modify delivered/cancelled order"));
             case ITEM_NOT_IN_ORDER -> ResponseEntity.badRequest()
                     .body(Map.of("error", "Item does not belong to this order"));
+            case PAID_REQUIRES_REFUND -> ResponseEntity.status(409)
+                    .body(Map.of("error", "คำสั่งซื้อนี้ชำระเงินแล้ว ต้องดำเนินการผ่านระบบขอคืนเงิน (/api/cancel-requests)",
+                            "requiresRefund", true));
             default -> ResponseEntity.badRequest().body(Map.of("error", result.result().name()));
         };
     }

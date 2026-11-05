@@ -23,7 +23,7 @@ import java.util.Optional;
  *  - SLF4J logger
  */
 @RestController
-@RequestMapping("/api/admin/profile")
+@RequestMapping("/api/admin/profile/{email}")
 public class AdminProfileController {
 
     private static final Logger log = LoggerFactory.getLogger(AdminProfileController.class);
@@ -36,7 +36,7 @@ public class AdminProfileController {
         this.passwordEncoder = passwordEncoder;
     }
 
-    @GetMapping("/{email}")
+    @GetMapping
     public ResponseEntity<Map<String, Object>> getAdminProfile(@PathVariable String email) {
         Optional<AdminEntity> adminOpt = adminRepository.findByEmailIgnoreCase(email);
         if (adminOpt.isEmpty()) return ApiResponse.badRequest("ไม่พบข้อมูล Admin");
@@ -54,7 +54,7 @@ public class AdminProfileController {
         return ApiResponse.ok(Map.of("profile", profile));
     }
 
-    @PutMapping("/{email}")
+    @PutMapping
     public ResponseEntity<Map<String, Object>> updateAdminProfile(
             @PathVariable String email,
             @RequestBody Map<String, String> request) {
@@ -75,7 +75,7 @@ public class AdminProfileController {
         }
     }
 
-    @PutMapping("/{email}/password")
+    @PutMapping("/password")
     public ResponseEntity<Map<String, Object>> changePassword(
             @PathVariable String email,
             @RequestBody Map<String, String> request) {

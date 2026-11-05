@@ -225,7 +225,7 @@ public class AdminAuthController {
                 : role.trim();
         String searchParam = (search == null || search.isBlank()) ? null : search.trim();
 
-        Pageable pageable = PageRequest.of(p, s, Sort.by(Sort.Direction.ASC, "id"));
+        Pageable pageable = PageRequest.of(p, s, Sort.by(Sort.Direction.ASC, AdminEntity::getId));
 
         // ✅ เติมเงื่อนไขเฉพาะตอนมีค่า (ไม่มีค่า = ไม่กรอง) — เลี่ยง null parameter บน PostgreSQL
         Specification<AdminEntity> spec = (root, q, cb) -> {

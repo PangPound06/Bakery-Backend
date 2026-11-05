@@ -31,6 +31,15 @@ public class OrderItemEntity {
     @Column(name = "image") // ✅ เพิ่ม field นี้
     private String image;
 
+    /**
+     * จำนวนชิ้นที่ถูกยกเลิกไปแล้วจากรายการนี้
+     *
+     * ตั้งค่าเริ่มต้นเป็น 0 เพราะคอลัมน์ฝั่ง DB เป็น NOT NULL DEFAULT 0
+     * ถ้าปล่อยเป็น null Hibernate จะ insert null ลงไปแล้ว order ใหม่สร้างไม่ผ่าน
+     */
+    @Column(name = "cancelled_qty")
+    private Integer cancelledQty = 0;
+
     // ===== Getters and Setters =====
     public Long getId() {
         return id;
@@ -94,5 +103,13 @@ public class OrderItemEntity {
 
     public void setImage(String image) {
         this.image = image;
+    }
+
+    public Integer getCancelledQty() {
+        return cancelledQty == null ? 0 : cancelledQty;
+    }
+
+    public void setCancelledQty(Integer cancelledQty) {
+        this.cancelledQty = cancelledQty;
     }
 }

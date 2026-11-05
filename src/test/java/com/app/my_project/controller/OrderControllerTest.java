@@ -48,6 +48,8 @@ class OrderControllerTest {
     private AdminRepository adminRepository;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private RefundService refundService;
 
     @InjectMocks
     private OrderController controller;
@@ -81,8 +83,9 @@ class OrderControllerTest {
     class CreateOrderTests {
 
         @Test
-        @DisplayName("Happy path: return orderId + ordCode")
+        @DisplayName("แอดมิน (POS) สร้างออเดอร์แทนลูกค้า → return orderId + ordCode")
         void create_success() {
+            mockAdmin();
             OrderEntity saved = makeOrder(1L);
             when(orderService.createOrder(eq("user@test.com"), any()))
                     .thenReturn(saved);
@@ -93,7 +96,7 @@ class OrderControllerTest {
             body.put("total", 130.0);
             body.put("items", List.of());
 
-            ResponseEntity<?> response = controller.createOrder(body, null);
+            ResponseEntity<?> response = controller.createOrder(body, ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             @SuppressWarnings("unchecked")
@@ -102,23 +105,40 @@ class OrderControllerTest {
         }
 
         @Test
-        @DisplayName("ไม่มี email → 400")
+        @DisplayName("แอดมินไม่ส่ง email → 400")
         void create_missingEmail_returns400() {
-            ResponseEntity<?> response = controller.createOrder(new HashMap<>(), null);
+            mockAdmin();
+
+            ResponseEntity<?> response = controller.createOrder(new HashMap<>(), ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(400);
             verifyNoInteractions(orderService);
         }
 
         @Test
+        @DisplayName("ไม่มี token → 401 (ลูกค้าต้องล็อกอิน และ email มาจาก token เท่านั้น)")
+        void create_withoutToken_returns401() {
+            when(jwtService.getUserIdFromHeader(null)).thenReturn(null);
+
+            Map<String, Object> body = new HashMap<>();
+            body.put("email", "someone-else@test.com");
+
+            ResponseEntity<?> response = controller.createOrder(body, null);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(401);
+            verifyNoInteractions(orderService);
+        }
+
+        @Test
         @DisplayName("Service throw → 500")
         void create_serviceThrows_returns500() {
+            mockAdmin();
             when(orderService.createOrder(any(), any())).thenThrow(new RuntimeException("DB error"));
 
             Map<String, Object> body = new HashMap<>();
             body.put("email", "u@t.com");
 
-            ResponseEntity<?> response = controller.createOrder(body, null);
+            ResponseEntity<?> response = controller.createOrder(body, ADMIN_AUTH);
 
             assertThat(response.getStatusCode().value()).isEqualTo(500);
         }

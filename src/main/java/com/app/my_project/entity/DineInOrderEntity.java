@@ -23,6 +23,15 @@ public class DineInOrderEntity {
     private String slipImage;
     private String paymentStatus;
 
+    /**
+     * id ของบิลรวมใน tb_orders ที่ออเดอร์นี้ถูกรวมเข้าไป
+     *
+     * ต้องมีเส้นเชื่อมนี้ ไม่งั้นตอน webhook แจ้งว่าบิลจ่ายแล้ว
+     * จะหาไม่เจอว่าต้องไปปิดออเดอร์โต๊ะไหนบ้าง
+     */
+    @Column(name = "bill_order_id")
+    private Long billOrderId;
+
     // Getters & Setters
     public Long getId() {
         return id;
@@ -98,6 +107,14 @@ public class DineInOrderEntity {
 
     public String getPaymentStatus() {
         return paymentStatus;
+    }
+
+    public Long getBillOrderId() {
+        return billOrderId;
+    }
+
+    public void setBillOrderId(Long billOrderId) {
+        this.billOrderId = billOrderId;
     }
 
     public void setPaymentStatus(String paymentStatus) {

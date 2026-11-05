@@ -13,8 +13,6 @@ import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.UserEntity;
 import com.app.my_project.repository.*;
 import com.app.my_project.service.JwtService;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +21,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import javax.sql.DataSource;
 import java.net.URI;
@@ -56,6 +56,7 @@ import java.util.Optional;
 public class UserAuthController {
 
     private static final Logger log = LoggerFactory.getLogger(UserAuthController.class);
+    private static final JsonMapper GOOGLE_JSON = JsonMapper.builder().build();
 
     private final UserRepository userRepository;
     private final AdminRepository adminRepository;
@@ -231,9 +232,7 @@ public class UserAuthController {
             return;
         }
 
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            HttpClient client = HttpClient.newHttpClient();
+        try (HttpClient client = HttpClient.newHttpClient()) {
 
             // 1. Exchange code → access_token
             String tokenBody = "code=" + URLEncoder.encode(code, StandardCharsets.UTF_8)
@@ -247,7 +246,7 @@ public class UserAuthController {
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .POST(HttpRequest.BodyPublishers.ofString(tokenBody))
                     .build();
-            JsonNode tokenJson = mapper.readTree(
+            JsonNode tokenJson = GOOGLE_JSON.readTree(
                     client.send(tokenRequest, HttpResponse.BodyHandlers.ofString()).body());
 
             if (tokenJson.has("error")) {
@@ -259,15 +258,15 @@ public class UserAuthController {
             // 2. Get user info
             HttpRequest userInfoRequest = HttpRequest.newBuilder()
                     .uri(URI.create("https://www.googleapis.com/oauth2/v2/userinfo"))
-                    .header("Authorization", "Bearer " + tokenJson.get("access_token").asText())
+                    .header("Authorization", "Bearer " + tokenJson.get("access_token").asString())
                     .GET().build();
-            JsonNode userInfo = mapper.readTree(
+            JsonNode userInfo = GOOGLE_JSON.readTree(
                     client.send(userInfoRequest, HttpResponse.BodyHandlers.ofString()).body());
 
-            String googleId = userInfo.get("id").asText();
-            String email = userInfo.get("email").asText();
-            String name = userInfo.has("name") ? userInfo.get("name").asText() : "";
-            String picture = userInfo.has("picture") ? userInfo.get("picture").asText() : "";
+            String googleId = userInfo.get("id").asString();
+            String email = userInfo.get("email").asString();
+            String name = userInfo.has("name") ? userInfo.get("name").asString() : "";
+            String picture = userInfo.has("picture") ? userInfo.get("picture").asString() : "";
 
             // 3. Find or create user
             UserEntity user = findOrCreateGoogleUser(googleId, email, name, picture);

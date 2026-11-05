@@ -4,23 +4,15 @@ import java.util.TimeZone;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration;
 
-import jakarta.annotation.PostConstruct;
-import org.springframework.context.annotation.ComponentScan;
-
-@SpringBootApplication
-@RestController
-@ComponentScan(basePackages = "com.app.my_project")
+// ใช้ JWT ของเราเอง (JwtAuthFilter) จึงไม่ต้องการ user/password ที่ Spring Security สร้างให้อัตโนมัติ
+@SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
 public class MyProjectApplication {
 
 	public static void main(String[] args) {
+		// บังคับให้เซิร์ฟเวอร์ทำงานในเวลาประเทศไทยทั้งหมด (ต้องตั้งก่อน Spring สร้าง bean ใดๆ)
+		TimeZone.setDefault(TimeZone.getTimeZone("Asia/Bangkok"));
 		SpringApplication.run(MyProjectApplication.class, args);
 	}
-
-	@PostConstruct
-    public void init() {
-        // บังคับให้เซิร์ฟเวอร์ทำงานในเวลาประเทศไทยทั้งหมด
-        TimeZone.setDefault(TimeZone.getTimeZone("Asia/Bangkok"));
-    }
 }

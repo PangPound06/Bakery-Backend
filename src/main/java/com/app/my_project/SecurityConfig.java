@@ -58,6 +58,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // ✅ สำคัญ: OPTIONS request ต้อง permit (CORS preflight)
                         .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        // ✅ Stripe webhook — ไม่มี JWT (Stripe ยิงมาเอง)
+                        // ความปลอดภัยมาจากการ verify signature ใน controller
+                        // ไม่ใช่จาก Spring Security
+                        .requestMatchers("/api/stripe/webhook").permitAll()
                         .requestMatchers("/api/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll()
                         .anyRequest().permitAll());
@@ -73,6 +77,9 @@ public class SecurityConfig {
     @Bean
     public CorsFilter corsFilter() {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        // ✅ Stripe webhook ไม่ได้มาจาก browser จึงไม่มี Origin header
+        // ลงทะเบียน config เปล่าไว้ก่อน กัน CorsFilter ไปยุ่งกับมัน
+        source.registerCorsConfiguration("/api/stripe/webhook", new CorsConfiguration());
         source.registerCorsConfiguration("/**", buildCorsConfig());
         return new CorsFilter(source);
     }

@@ -25,7 +25,7 @@ import com.app.my_project.service.OrderReportService.OrderFilter;
  *  - GET /api/orders/admin/report-summary  → KPI + นับสถานะ + ยอดขายรายวัน
  */
 @RestController
-@RequestMapping("/api/orders")
+@RequestMapping("/api/orders/admin")
 @CrossOrigin
 public class OrderReportController {
 
@@ -41,7 +41,7 @@ public class OrderReportController {
         this.adminRepository = adminRepository;
     }
 
-    @GetMapping("/admin/page")
+    @GetMapping("/page")
     public ResponseEntity<?> page(
             @RequestHeader(value = "Authorization", required = false) String auth,
             @RequestParam(defaultValue = "0") int page,
@@ -81,7 +81,7 @@ public class OrderReportController {
         return ResponseEntity.ok(body);
     }
 
-    @GetMapping("/admin/report-summary")
+    @GetMapping("/report-summary")
     public ResponseEntity<?> reportSummary(
             @RequestHeader(value = "Authorization", required = false) String auth,
             @RequestParam(required = false) String from,

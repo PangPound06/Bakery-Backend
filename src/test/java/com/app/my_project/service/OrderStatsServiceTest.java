@@ -87,8 +87,9 @@ class OrderStatsServiceTest {
         @DisplayName("✅ Single product: qty + revenue + orderCount ถูกต้อง")
         void singleProduct_correctAggregates() {
             // 1 row: cake 1 ปอนด์, raw qty 8 (= 1 display), price 100, orderSubtotal 100
+            // order_items_total มาจาก SQL เป็นหน่วย "ออเดอร์" → 100 × 1 = 100
             when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
-                    row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 800.0, "cake")
+                    row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 100.0, "cake")
             ));
 
             OrderStatsService.TopProductsResult result = service.getTopProducts("all");
@@ -98,7 +99,7 @@ class OrderStatsServiceTest {
             assertThat(top.productName()).isEqualTo("Cake");
             assertThat(top.totalQty()).isEqualTo(1); // 8 raw / 8 = 1 display
             assertThat(top.orderCount()).isEqualTo(1);
-            // revenue = 100 (orderSubtotal) * (100*8 / 800) = 100 * 1 = 100
+            // revenue = 100 (orderSubtotal) * (100*1 / 100) = 100 * 1 = 100
             assertThat(top.totalRevenue()).isEqualTo(100);
         }
     }
@@ -112,8 +113,8 @@ class OrderStatsServiceTest {
         @DisplayName("✅ Same productName+option+category → group เป็น 1 entry")
         void sameKey_groupedIntoOne() {
             when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
-                    row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 800.0, "cake"),
-                    row("Cake", 100.0, 16, "1 ปอนด์", LocalDateTime.now(), 200.0, 1600.0, "cake")
+                    row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 100.0, "cake"),
+                    row("Cake", 100.0, 16, "1 ปอนด์", LocalDateTime.now(), 200.0, 200.0, "cake")
             ));
 
             OrderStatsService.TopProductsResult result = service.getTopProducts("all");
@@ -127,8 +128,8 @@ class OrderStatsServiceTest {
         @DisplayName("✅ ต่าง option (1 vs 2 ปอนด์) → แยกเป็น 2 entries")
         void differentOption_separateEntries() {
             when(jdbcTemplate.queryForList(anyString(), any(Timestamp.class))).thenReturn(List.of(
-                    row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 800.0, "cake"),
-                    row("Cake", 200.0, 16, "2 ปอนด์", LocalDateTime.now(), 200.0, 3200.0, "cake")
+                    row("Cake", 100.0, 8, "1 ปอนด์", LocalDateTime.now(), 100.0, 100.0, "cake"),
+                    row("Cake", 200.0, 16, "2 ปอนด์", LocalDateTime.now(), 200.0, 200.0, "cake")
             ));
 
             OrderStatsService.TopProductsResult result = service.getTopProducts("all");

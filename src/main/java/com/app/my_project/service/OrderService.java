@@ -197,7 +197,19 @@ public class OrderService {
     // CANCEL — restore stock + set status to cancelled
     // ═════════════════════════════════════════════════════════════════
 
-    public enum CancelResult { SUCCESS, NOT_FOUND, ALREADY_DELIVERED }
+    public enum CancelResult {
+        SUCCESS,
+        NOT_FOUND,
+        ALREADY_DELIVERED,
+        /**
+         * ✅ เพิ่มใหม่ — order ที่ชำระเงินแล้วห้ามยกเลิกผ่านทางนี้
+         *
+         * เมธอดนี้แค่คืน stock แล้วตั้งสถานะ cancelled ไม่รู้จัก Stripe เลย
+         * ถ้าปล่อยให้ยกเลิก order ที่จ่ายแล้ว = เงินลูกค้าค้างอยู่กับ Stripe
+         * โดยไม่มีใครรู้ ต้องไปทาง /api/cancel-requests แทน
+         */
+        PAID_REQUIRES_REFUND
+    }
 
     @Transactional
     public CancelResult cancelOrder(Long orderId) {
@@ -207,6 +219,11 @@ public class OrderService {
         OrderEntity order = opt.get();
         if ("delivered".equals(order.getOrderStatus())) {
             return CancelResult.ALREADY_DELIVERED;
+        }
+
+        // ✅ ปิดรู: จ่ายเงินแล้วต้องผ่านระบบขอคืนเงินเท่านั้น
+        if ("paid".equals(order.getPaymentStatus())) {
+            return CancelResult.PAID_REQUIRES_REFUND;
         }
 
         // restore stock for each item (batch แทน loop)

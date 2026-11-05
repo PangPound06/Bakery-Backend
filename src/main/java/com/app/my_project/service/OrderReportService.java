@@ -58,7 +58,7 @@ public class OrderReportService {
         PageRequest pageable = PageRequest.of(
                 Math.max(page, 0),
                 size <= 0 ? 50 : Math.min(size, 200),
-                Sort.by(Sort.Direction.DESC, "createdAt"));
+                Sort.by(Sort.Direction.DESC, OrderEntity::getCreatedAt));
         return orderRepository.findAll(spec, pageable);
     }
 
@@ -84,15 +84,17 @@ public class OrderReportService {
                     case "dine-in":
                         ps.add(cb.equal(root.get("orderType"), "dine-in"));
                         break;
+                    // ดูจากคอลัมน์ dine_type แทนการค้นคำใน note ที่แอดมินพิมพ์แก้ได้
+                    // บิลเก่าที่ dine_type ยังว่าง ถือเป็น alacarte ตามค่าตั้งต้นเดิม
                     case "dine-in-alacarte":
                         ps.add(cb.equal(root.get("orderType"), "dine-in"));
                         ps.add(cb.or(
-                                cb.isNull(root.get("note")),
-                                cb.notLike(root.get("note"), "%Buffet%")));
+                                cb.isNull(root.get("dineType")),
+                                cb.notEqual(root.get("dineType"), "buffet")));
                         break;
                     case "dine-in-buffet":
                         ps.add(cb.equal(root.get("orderType"), "dine-in"));
-                        ps.add(cb.like(root.get("note"), "%Buffet%"));
+                        ps.add(cb.equal(root.get("dineType"), "buffet"));
                         break;
                     default:
                         break;
@@ -206,9 +208,9 @@ public class OrderReportService {
                         "COUNT(*) FILTER (WHERE order_type = 'pos') AS pos, " +
                         "COUNT(*) FILTER (WHERE order_type = 'dine-in') AS dinein, " +
                         "COUNT(*) FILTER (WHERE order_type IS NULL OR order_type NOT IN ('pos','dine-in')) AS online, " +
-                        "COUNT(*) FILTER (WHERE order_type = 'dine-in' AND (note IS NULL OR note NOT LIKE '%Buffet%')) AS alacarte, "
+                        "COUNT(*) FILTER (WHERE order_type = 'dine-in' AND (dine_type IS NULL OR dine_type <> 'buffet')) AS alacarte, "
                         +
-                        "COUNT(*) FILTER (WHERE order_type = 'dine-in' AND note LIKE '%Buffet%') AS buffet " +
+                        "COUNT(*) FILTER (WHERE order_type = 'dine-in' AND dine_type = 'buffet') AS buffet " +
                         "FROM tb_orders" + where,
                 a);
         channelCounts.put("all", ((Number) ch.get("total")).longValue());
