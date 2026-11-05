@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * CheckoutController — จุดเริ่มต้นของการชำระเงินจริง
@@ -27,7 +28,7 @@ import java.util.Map;
  * ═══ ลำดับการทำงานของ POST /intent ═══
  * 1. ยืนยันตัวตนจาก JWT → ได้ email (ไม่เชื่อ email ใน body)
  * 2. เช็คว่าร้านเปิดรับออเดอร์อยู่
- * 3. ยกเลิก order ค้างรอจ่ายของ user คนนี้ (คืน stock ที่จองไว้)
+ * 3. ปิดรอบจ่ายเงินเก่าที่ค้างอยู่ — จ่ายแล้วบันทึกเป็น paid, ยังไม่จ่ายยกเลิก QR เดิม (PaymentReconciler)
  * 4. คำนวณราคาใหม่ทั้งใบจาก tb_products
  * 5. สร้าง order เป็น awaiting_payment + จอง stock
  * 6. สร้าง PaymentIntent แล้วส่ง QR (PromptPay) หรือ client_secret (บัตร) กลับไป
@@ -48,6 +49,7 @@ public class CheckoutController {
     private final PaymentStateService paymentStateService;
     private final StripeService stripeService;
     private final StoreSettingService storeSettingService;
+    private final PaymentReconciler paymentReconciler;
 
     public CheckoutController(JwtService jwtService,
             UserRepository userRepository,
@@ -56,7 +58,8 @@ public class CheckoutController {
             PricingService pricingService,
             PaymentStateService paymentStateService,
             StripeService stripeService,
-            StoreSettingService storeSettingService) {
+            StoreSettingService storeSettingService,
+            PaymentReconciler paymentReconciler) {
         this.jwtService = jwtService;
         this.userRepository = userRepository;
         this.orderRepository = orderRepository;
@@ -65,6 +68,7 @@ public class CheckoutController {
         this.paymentStateService = paymentStateService;
         this.stripeService = stripeService;
         this.storeSettingService = storeSettingService;
+        this.paymentReconciler = paymentReconciler;
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -136,9 +140,12 @@ public class CheckoutController {
             // ─── คำนวณราคาใหม่ทั้งใบ ← หัวใจของความปลอดภัย ───
             PricingService.PricedCart cart = pricingService.priceCart(email);
 
+            // ─── ปิดรอบเก่าก่อน: order ที่จ่ายแล้วแต่ webhook ยังไม่มา จะไม่ถูกเขียนทับ ───
+            Set<Long> locked = paymentReconciler.settleAwaiting(email, "online");
+
             // ─── มีแถวที่ยังไม่จ่ายค้างอยู่ → เขียนทับแถวนั้น ไม่สร้างแถวใหม่ ───
             PaymentStateService.ReuseResult reuse = paymentStateService.prepareForNewIntent(
-                    email, toCartLines(cart), cart.subtotal(), cart.shipping(), cart.total());
+                    email, locked, toCartLines(cart), cart.subtotal(), cart.shipping(), cart.total());
             reuse.intentsToCancel().forEach(stripeService::cancelIntent);
 
             if (reuse.reusable() != null) {
@@ -210,7 +217,11 @@ public class CheckoutController {
         return orderRepository.findById(orderId)
                 .filter(o -> email.equals(o.getEmail()))
                 .<ResponseEntity<?>>map(o -> {
-                    stripeService.cancelIntent(o.getStripePaymentIntentId());
+                    // ลูกค้าอาจสแกนจ่ายไปแล้วก่อนกดยกเลิก — ห้ามปล่อย order ที่ได้เงินแล้ว
+                    if (paymentReconciler.settle(o) != PaymentReconciler.Outcome.UNPAID) {
+                        return ResponseEntity.status(409).body(Map.of("success", false, "paid", true,
+                                "error", "คำสั่งซื้อนี้ชำระเงินแล้ว ไม่สามารถยกเลิกการชำระเงินได้"));
+                    }
                     paymentStateService.releaseOrder(o.getId(),
                             PaymentStateService.EXPIRED, "ลูกค้ายกเลิกเอง");
                     return ResponseEntity.ok(Map.of("success", true));
@@ -232,6 +243,7 @@ public class CheckoutController {
 
         return orderRepository.findById(orderId)
                 .filter(o -> email.equals(o.getEmail())) // ห้ามดู order ของคนอื่น
+                .map(this::refreshFromStripe)
                 .<ResponseEntity<?>>map(o -> ResponseEntity.ok(Map.of(
                         "success", true,
                         "orderId", o.getId(),
@@ -246,6 +258,16 @@ public class CheckoutController {
     // ═════════════════════════════════════════════════════════════════
     // HELPERS
     // ═════════════════════════════════════════════════════════════════
+
+    /**
+     * ถาม Stripe ซ้ำถ้ายังรอจ่ายอยู่ แล้วอ่าน order ใหม่จาก DB
+     * หน้าเว็บจึงเห็น "ชำระแล้ว" ทันทีที่ Stripe ได้เงิน แม้ webhook ยังมาไม่ถึง
+     */
+    private OrderEntity refreshFromStripe(OrderEntity order) {
+        if (paymentReconciler.refresh(order) != PaymentReconciler.Outcome.PAID)
+            return order;
+        return orderRepository.findById(order.getId()).orElse(order);
+    }
 
     /** email จาก JWT เท่านั้น — ไม่รับจาก body */
     private String resolveEmail(String authHeader) {

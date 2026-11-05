@@ -10,6 +10,7 @@ import com.app.my_project.repository.OrderRepository;
 import com.app.my_project.repository.OrderItemRepository;
 import com.app.my_project.common.ProductQuantityHelper;
 import com.app.my_project.service.JwtService;
+import com.app.my_project.service.PaymentReconciler;
 import com.app.my_project.service.PaymentStateService;
 import com.app.my_project.service.StripeService;
 import org.slf4j.Logger;
@@ -39,7 +40,8 @@ public class DineInOrderController {
             JwtService jwtService,
             ProductQuantityHelper qtyHelper,
             StripeService stripeService,
-            PaymentStateService paymentStateService) {
+            PaymentStateService paymentStateService,
+            PaymentReconciler paymentReconciler) {
         this.dineInOrderRepository = dineInOrderRepository;
         this.dineInOrderItemRepository = dineInOrderItemRepository;
         this.dataSource = dataSource;
@@ -49,6 +51,7 @@ public class DineInOrderController {
         this.qtyHelper = qtyHelper;
         this.stripeService = stripeService;
         this.paymentStateService = paymentStateService;
+        this.paymentReconciler = paymentReconciler;
     }
 
     private static final Logger log = LoggerFactory.getLogger(DineInOrderController.class);
@@ -70,6 +73,8 @@ public class DineInOrderController {
     private final StripeService stripeService;
 
     private final PaymentStateService paymentStateService;
+
+    private final PaymentReconciler paymentReconciler;
 
     private static final int FRESH_STOCK_VALUE = 9999;
 
@@ -215,7 +220,9 @@ public class DineInOrderController {
              * ตรรกะเดียวกับ PaymentStateService.prepareForNewIntent ฝั่งออนไลน์
              * แถวที่ยังไม่จ่ายของโต๊ะนี้มีได้แถวเดียวเท่านั้น
              */
-            OrderEntity reusable = findReusableBill(email);
+            // บิลที่จ่ายแล้วแต่ webhook ยังไม่มา จะถูกบันทึกเป็น paid และไม่ถูกเขียนทับ
+            Set<Long> locked = paymentReconciler.settleAwaiting(email, "dine-in");
+            OrderEntity reusable = findReusableBill(email, locked);
             if (reusable != null) {
                 // QR เดิมต้องตาย ไม่งั้นลูกค้ามีสอง QR ที่จ่ายได้ทั้งคู่
                 if (reusable.getStripePaymentIntentId() != null) {
@@ -346,7 +353,7 @@ public class DineInOrderController {
      *
      * กดยกเลิกกี่ร้อยครั้งก็ยังเป็นแถวเดิมแถวเดียว
      */
-    private OrderEntity findReusableBill(String email) {
+    private OrderEntity findReusableBill(String email, Set<Long> locked) {
         List<OrderEntity> unpaid = new ArrayList<>();
         unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, "awaiting_payment"));
         unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, "expired"));
@@ -354,7 +361,7 @@ public class DineInOrderController {
 
         OrderEntity latest = null;
         for (OrderEntity o : unpaid) {
-            if (!"dine-in".equals(o.getOrderType()))
+            if (!"dine-in".equals(o.getOrderType()) || locked.contains(o.getId()))
                 continue;
             if (latest == null || o.getId() > latest.getId()) {
                 latest = o;
@@ -386,11 +393,12 @@ public class DineInOrderController {
                     .body(Map.of("success", false, "message", "บิลนี้ชำระเงินแล้ว"));
         }
 
-        String intentId = bill.getStripePaymentIntentId();
-        paymentStateService.releaseOrder(orderId, "expired", "ลูกค้ายกเลิกการชำระเงิน");
-        if (intentId != null && !intentId.isBlank()) {
-            stripeService.cancelIntent(intentId);
+        // ลูกค้าอาจสแกนจ่ายไปแล้วก่อนกดยกเลิก — ห้ามปล่อยบิลที่ได้เงินแล้ว
+        if (paymentReconciler.settle(bill) != PaymentReconciler.Outcome.UNPAID) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("success", false, "paid", true, "message", "บิลนี้ชำระเงินแล้ว"));
         }
+        paymentStateService.releaseOrder(orderId, PaymentStateService.EXPIRED, "ลูกค้ายกเลิกการชำระเงิน");
 
         return ResponseEntity.ok(Map.of("success", true));
     }
@@ -412,6 +420,9 @@ public class DineInOrderController {
         }
 
         OrderEntity bill = opt.get();
+        if (paymentReconciler.refresh(bill) == PaymentReconciler.Outcome.PAID) {
+            bill = orderRepository.findById(orderId).orElse(bill);
+        }
         return ResponseEntity.ok(Map.of(
                 "success", true,
                 "orderId", bill.getId(),

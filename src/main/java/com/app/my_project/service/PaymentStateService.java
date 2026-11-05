@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * PaymentStateService — เปลี่ยนสถานะการจ่ายเงินของ order
@@ -174,16 +175,23 @@ public class PaymentStateService {
      * ord_code กับ id คงเดิม ลูกค้าจึงเห็นเลขเดียวตลอดจนกว่าจะจ่ายสำเร็จ
      * เมื่อจ่ายแล้วแถวนั้นไม่เข้าเงื่อนไขอีก การซื้อครั้งถัดไปจึงได้แถวใหม่ตามปกติ
      *
+     * ═══ ห้ามเขียนทับ order ที่อาจจ่ายแล้ว ═══
+     * ผู้เรียกต้องผ่าน PaymentReconciler.settleAwaiting() ก่อนเสมอ
+     * order ที่ Stripe ยืนยันว่าจ่ายแล้วจะกลายเป็น paid ไปแล้ว ส่วนที่ยังไม่แน่ใจส่งมาใน locked
+     * และใช้เฉพาะ order ออนไลน์ — บิลหน้าร้านมีรอบจ่ายเงินของตัวเอง
+     *
+     * @param locked id ของ order ที่ห้ามแตะ (กำลังตัดเงิน / ถาม Stripe ไม่สำเร็จ)
      * @return แถวที่เขียนทับแล้ว (null = ไม่มีแถวค้าง ให้ไปสร้างใหม่) + intent ที่ต้องยกเลิกกับ Stripe
      */
     @Transactional
-    public ReuseResult prepareForNewIntent(String email, List<CartLine> wanted,
+    public ReuseResult prepareForNewIntent(String email, Set<Long> locked, List<CartLine> wanted,
             double subtotal, double shipping, double total) {
 
         List<OrderEntity> unpaid = new ArrayList<>();
         unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, AWAITING));
         unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, EXPIRED));
         unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, FAILED));
+        unpaid.removeIf(o -> locked.contains(o.getId()) || !"online".equals(o.getOrderType()));
 
         List<String> intentsToCancel = new ArrayList<>();
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(REUSE_WINDOW_MINUTES);

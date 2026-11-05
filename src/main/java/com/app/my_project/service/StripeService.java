@@ -202,15 +202,20 @@ public class StripeService {
         return client.v1().paymentIntents().retrieve(paymentIntentId);
     }
 
-    /** ยกเลิก intent ที่ยังไม่จ่าย — ใช้ตอนลูกค้ากดสั่งใหม่ทับของเดิม */
-    public void cancelIntent(String paymentIntentId) {
+    /**
+     * ยกเลิก intent ที่ยังไม่จ่าย — ใช้ตอนลูกค้ากดสั่งใหม่ทับของเดิม
+     *
+     * @return true = ยกเลิกสำเร็จ, false = ยกเลิกไม่ได้ (เช่น จ่ายไปแล้วหรือถูกยกเลิกไปก่อนแล้ว)
+     */
+    public boolean cancelIntent(String paymentIntentId) {
         if (!enabled || paymentIntentId == null || paymentIntentId.isBlank())
-            return;
+            return false;
         try {
             client.v1().paymentIntents().cancel(paymentIntentId);
+            return true;
         } catch (StripeException e) {
-            // intent อาจจ่ายไปแล้ว/ยกเลิกไปแล้ว — ไม่ใช่เรื่องคอขาดบาดตาย
             log.debug("cancel intent {} ไม่สำเร็จ: {}", paymentIntentId, e.getMessage());
+            return false;
         }
     }
 

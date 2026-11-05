@@ -1,0 +1,15 @@
+{
+  "properties": [
+    { "name": "jwt.secret", "type": "java.lang.String", "description": "Secret used to sign and verify JWT access tokens." },
+    { "name": "google.client.id", "type": "java.lang.String", "description": "Google OAuth client ID." },
+    { "name": "google.client.secret", "type": "java.lang.String", "description": "Google OAuth client secret." },
+    { "name": "google.redirect.uri", "type": "java.lang.String", "description": "Google OAuth callback URL handled by this backend." },
+    { "name": "frontend.url", "type": "java.lang.String", "description": "Base URL of the Next.js frontend (redirects and Stripe return URLs)." },
+    { "name": "cloudinary.cloud-name", "type": "java.lang.String", "description": "Cloudinary cloud name for image uploads." },
+    { "name": "cloudinary.api-key", "type": "java.lang.String", "description": "Cloudinary API key." },
+    { "name": "cloudinary.api-secret", "type": "java.lang.String", "description": "Cloudinary API secret." },
+    { "name": "stripe.secret-key", "type": "java.lang.String", "description": "Stripe secret key (sk_test_... or sk_live_...). Blank disables payment endpoints." },
+    { "name": "stripe.webhook-secret", "type": "java.lang.String", "description": "Signing secret (whsec_...) of the Stripe webhook endpoint." },
+    { "name": "stripe.currency", "type": "java.lang.String", "description": "Currency for PaymentIntents.", "defaultValue": "thb" }
+  ]
+}
