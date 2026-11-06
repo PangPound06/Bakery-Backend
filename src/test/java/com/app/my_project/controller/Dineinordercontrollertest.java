@@ -100,7 +100,7 @@ class DineInOrderControllerTest {
             mockUser("user@example.com");
             DineInOrderEntity saved = makeOrder(1L, "user@example.com", "5", "pending", null);
             saved.setOrdCode("ORD1");
-            when(billService.placeTableOrder("user@example.com", "5")).thenReturn(saved);
+            when(billService.placeTableOrder("user@example.com", "5", DineInBillService.DineType.ALACARTE)).thenReturn(saved);
 
             ResponseEntity<?> response = controller.createOrder(Map.of("tableNo", "5", "total", 1));
 
@@ -112,7 +112,7 @@ class DineInOrderControllerTest {
         @DisplayName("ตะกร้าว่าง → 400 พร้อมข้อความ")
         void createOrder_emptyCart_returns400() {
             mockUser("user@example.com");
-            when(billService.placeTableOrder("user@example.com", "5"))
+            when(billService.placeTableOrder("user@example.com", "5", DineInBillService.DineType.ALACARTE))
                     .thenThrow(new PricingService.CartValidationException("ตะกร้าสินค้าว่าง"));
 
             ResponseEntity<?> response = controller.createOrder(Map.of("tableNo", "5"));
@@ -185,6 +185,40 @@ class DineInOrderControllerTest {
             ResponseEntity<?> response = controller.requestBill(Map.of("paymentMethod", "transfer"));
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("GET /api/dinein/session — เวลาบุฟเฟต์ที่เหลือ")
+    class SessionTests {
+
+        @Test
+        @DisplayName("บุฟเฟต์หมดเวลาแล้ว → canOrder=false, secondsLeft=0")
+        void buffetExpired() {
+            mockUser("user@example.com");
+            LocalDateTime now = LocalDateTime.of(2026, 11, 6, 20, 0);
+            when(billService.now()).thenReturn(now);
+            when(billService.currentSession("user@example.com", "5")).thenReturn(Optional.of(
+                    new DineInBillService.DiningSession(DineInBillService.DineType.BUFFET, now.minusMinutes(101))));
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) controller.session("5").getBody();
+
+            assertThat(body).containsEntry("active", true).containsEntry("dineType", "buffet")
+                    .containsEntry("canOrder", false).containsEntry("secondsLeft", 0L);
+        }
+
+        @Test
+        @DisplayName("ยังไม่ได้สั่ง → active=false สั่งได้")
+        void noSession() {
+            mockUser("user@example.com");
+            when(billService.currentSession("user@example.com", null)).thenReturn(Optional.empty());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) controller.session(null).getBody();
+
+            assertThat(body).containsEntry("active", false).containsEntry("canOrder", true);
         }
     }
 

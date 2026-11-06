@@ -18,9 +18,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -30,6 +34,11 @@ import java.util.Set;
  * ออเดอร์โต๊ะคิดจากตะกร้าทานในร้าน (tb_cart.cart_mode = dinein) ผ่าน PricingService
  * บุฟเฟต์คิดจากราคาต่อคนของร้าน × จำนวนคน — ไม่รับตัวเลขราคาจาก browser เลย
  * เพราะยอดบิลถูกนำไปตัดบัตร / ออก QR จริง
+ *
+ * ═══ มื้ออาหาร (session) ═══
+ * ออเดอร์โต๊ะที่ยังไม่จ่ายของลูกค้าคนนี้ = มื้อเดียวกัน เริ่มนับจากออเดอร์แรก จบเมื่อบิลจ่ายแล้ว
+ * ประเภทการทาน (à la carte / บุฟเฟต์) ล็อกตามออเดอร์แรกของมื้อ — เปลี่ยนกลางมื้อไม่ได้
+ * บุฟเฟต์สั่งได้ BUFFET_DURATION นับจากออเดอร์แรก เกินแล้วสั่งเพิ่มไม่ได้ (เรียกเก็บเงินได้ตามปกติ)
  *
  * ═══ บิลกับออเดอร์โต๊ะ ═══
  * บิล = หนึ่งแถวใน tb_orders (order_type = dine-in) ที่รวมออเดอร์โต๊ะที่เสิร์ฟแล้ว (bill_order_id ชี้มาที่บิล)
@@ -44,6 +53,8 @@ public class DineInBillService {
     public static final double BUFFET_PRICE_PER_PERSON = 1599.0;
     /** โต๊ะใหญ่สุดของร้านรับได้ 8 คน */
     public static final int MAX_BUFFET_PAX = 8;
+    /** เวลาสั่งอาหารของบุฟเฟต์ นับจากออเดอร์แรกของมื้อ */
+    public static final Duration BUFFET_DURATION = Duration.ofMinutes(100);
     private static final int MAX_TABLE_NO_LENGTH = 10;
 
     private static final String DINE_IN = "dine-in";
@@ -65,6 +76,30 @@ public class DineInBillService {
         /** ไม่ส่งมา / ไม่รู้จัก = à la carte */
         public static DineType parse(String raw) {
             return BUFFET.value.equalsIgnoreCase(raw == null ? "" : raw.trim()) ? BUFFET : ALACARTE;
+        }
+    }
+
+    /**
+     * มื้อที่กำลังทานอยู่
+     *
+     * @param startedAt เวลาออเดอร์แรกของมื้อ
+     */
+    public record DiningSession(DineType dineType, LocalDateTime startedAt) {
+
+        /** หมดเวลาสั่ง (เฉพาะบุฟเฟต์) — null = ไม่จำกัดเวลา */
+        public LocalDateTime orderingEndsAt() {
+            return dineType == DineType.BUFFET ? startedAt.plus(BUFFET_DURATION) : null;
+        }
+
+        public boolean canOrderAt(LocalDateTime now) {
+            LocalDateTime endsAt = orderingEndsAt();
+            return endsAt == null || now.isBefore(endsAt);
+        }
+
+        /** วินาทีที่เหลือให้สั่ง (บุฟเฟต์) — ไม่ติดลบ, null = ไม่จำกัดเวลา */
+        public Long secondsLeftAt(LocalDateTime now) {
+            LocalDateTime endsAt = orderingEndsAt();
+            return endsAt == null ? null : Math.max(0, Duration.between(now, endsAt).toSeconds());
         }
     }
 
@@ -93,6 +128,7 @@ public class DineInBillService {
     private final PaymentReconciler paymentReconciler;
     private final OrderCodeGenerator codeGenerator;
     private final ProductQuantityHelper qtyHelper;
+    private final Clock clock;
 
     public DineInBillService(DineInOrderRepository dineInOrderRepository,
             DineInOrderItemRepository dineInOrderItemRepository,
@@ -104,7 +140,8 @@ public class DineInBillService {
             PaymentStateService paymentStateService,
             PaymentReconciler paymentReconciler,
             OrderCodeGenerator codeGenerator,
-            ProductQuantityHelper qtyHelper) {
+            ProductQuantityHelper qtyHelper,
+            Clock clock) {
         this.dineInOrderRepository = dineInOrderRepository;
         this.dineInOrderItemRepository = dineInOrderItemRepository;
         this.orderRepository = orderRepository;
@@ -116,6 +153,7 @@ public class DineInBillService {
         this.paymentReconciler = paymentReconciler;
         this.codeGenerator = codeGenerator;
         this.qtyHelper = qtyHelper;
+        this.clock = clock;
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -125,24 +163,33 @@ public class DineInBillService {
     /**
      * ส่งตะกร้าทานในร้านเข้าครัว → ออเดอร์โต๊ะใหม่ 1 ใบ + ตัด stock + ล้างตะกร้าทานในร้าน
      *
-     * @throws BillException ไม่ระบุโต๊ะ
+     * @param requestedType ประเภทการทานที่ลูกค้าเลือก — ใช้เฉพาะออเดอร์แรกของมื้อ
+     *                      ออเดอร์ถัดไปใช้ประเภทของมื้อเสมอ (กันสลับเป็น à la carte เพื่อเลี่ยงเวลาบุฟเฟต์)
+     * @throws BillException ไม่ระบุโต๊ะ / บุฟเฟต์หมดเวลาสั่งแล้ว
      * @throws PricingService.CartValidationException ตะกร้าว่าง / ของหมด / ปิดขาย
      */
     @Transactional
-    public DineInOrderEntity placeTableOrder(String email, String tableNo) {
+    public DineInOrderEntity placeTableOrder(String email, String tableNo, DineType requestedType) {
         String table = tableNo == null ? "" : tableNo.trim();
         if (table.isEmpty() || table.length() > MAX_TABLE_NO_LENGTH)
             throw new BillException(HttpStatus.BAD_REQUEST, "กรุณาระบุเลขโต๊ะ");
+
+        Optional<DiningSession> session = currentSession(email, table);
+        if (session.isPresent() && !session.get().canOrderAt(now()))
+            throw new BillException(HttpStatus.CONFLICT, "หมดเวลาบุฟเฟต์ " + BUFFET_DURATION.toMinutes()
+                    + " นาทีแล้ว สั่งอาหารเพิ่มไม่ได้ กรุณาเรียกเก็บเงิน");
+        DineType dineType = session.map(DiningSession::dineType).orElse(requestedType);
 
         PricingService.PricedCart cart = pricingService.priceCart(email, CartMode.DINE_IN);
 
         DineInOrderEntity order = new DineInOrderEntity();
         order.setEmail(email);
         order.setTableNo(table);
+        order.setDineType(dineType.value());
         order.setSubtotal(cart.subtotal());
         order.setTotal(cart.subtotal());
         order.setOrderStatus("pending");
-        order.setCreatedAt(LocalDateTime.now());
+        order.setCreatedAt(now());
         DineInOrderEntity saved = dineInOrderRepository.save(order);
         saved.setOrdCode(codeGenerator.generate(saved.getId()));
         dineInOrderRepository.save(saved);
@@ -174,13 +221,17 @@ public class DineInBillService {
      * เตรียมบิลรอจ่าย (awaiting_payment) ของออเดอร์โต๊ะที่เสิร์ฟแล้ว — ยังไม่ออกช่องทางจ่ายเงิน
      *
      * กดเรียกบิลซ้ำ (เช่น สลับวิธีจ่าย) ใช้แถวบิลเดิมเขียนทับ เลขบิลจึงไม่เปลี่ยน
+     * ประเภทการทานมาจากออเดอร์ของมื้อ — ค่าที่ client ส่งมาใช้เฉพาะออเดอร์เก่าที่ยังไม่มีประเภทเก็บไว้
      *
-     * @param tableNo null/ว่าง = ทุกโต๊ะของลูกค้าคนนี้
-     * @param pax     จำนวนคน (เฉพาะบุฟเฟต์)
+     * @param tableNo       null/ว่าง = ทุกโต๊ะของลูกค้าคนนี้
+     * @param requestedType ประเภทที่ client ส่งมา (สำรองสำหรับออเดอร์เก่า)
+     * @param pax           จำนวนคน (เฉพาะบุฟเฟต์)
      * @throws BillException ไม่มีออเดอร์ให้เก็บเงิน / จำนวนคนผิด / มีรอบจ่ายเงินที่ยังไม่จบ
      */
     @Transactional
-    public OrderEntity prepareBill(String email, String tableNo, DineType dineType, int pax, CheckoutMethod method) {
+    public OrderEntity prepareBill(String email, String tableNo, DineType requestedType, int pax,
+            CheckoutMethod method) {
+        DineType dineType = recordedTypeOf(activeTableOrders(email, tableNo)).orElse(requestedType);
         if (dineType == DineType.BUFFET && (pax < 1 || pax > MAX_BUFFET_PAX))
             throw new BillException(HttpStatus.BAD_REQUEST, "จำนวนคนต้องอยู่ระหว่าง 1-" + MAX_BUFFET_PAX + " คน");
 
@@ -215,7 +266,7 @@ public class DineInBillService {
         bill.setStripePaymentIntentId(null);
         bill.setPaymentId(null);
         bill.setSlipImage(null);
-        bill.setCreatedAt(LocalDateTime.now());
+        bill.setCreatedAt(now());
         OrderEntity saved = orderRepository.save(bill);
         if (saved.getOrdCode() == null || saved.getOrdCode().isBlank()) {
             saved.setOrdCode(codeGenerator.generate(saved.getId()));
@@ -226,6 +277,33 @@ public class DineInBillService {
         log.info("🧾 บิล {} โต๊ะ {} ยอด ฿{} ({}, {})", saved.getOrdCode(), table, total,
                 dineType.value(), method.requestValue());
         return saved;
+    }
+
+    /**
+     * มื้อที่ลูกค้ากำลังทานอยู่ — empty = ยังไม่ได้สั่งอะไร (หรือจ่ายบิลไปแล้ว)
+     *
+     * @param tableNo null/ว่าง = ทุกโต๊ะของลูกค้าคนนี้
+     */
+    public Optional<DiningSession> currentSession(String email, String tableNo) {
+        List<DineInOrderEntity> active = activeTableOrders(email, tableNo);
+        return active.stream()
+                .map(DineInOrderEntity::getCreatedAt)
+                .filter(Objects::nonNull)
+                .min(Comparator.naturalOrder())
+                .map(start -> new DiningSession(recordedTypeOf(active).orElse(DineType.ALACARTE), start));
+    }
+
+    /** เวลาปัจจุบันของ server (ฉีด Clock เข้ามาเพื่อให้ทดสอบเรื่องเวลาได้) */
+    public LocalDateTime now() {
+        return LocalDateTime.now(clock);
+    }
+
+    /** ประเภทการทานที่บันทึกไว้กับออเดอร์แรกของมื้อ (ออเดอร์เก่าที่ไม่มีค่า = empty) */
+    private static Optional<DineType> recordedTypeOf(List<DineInOrderEntity> orders) {
+        return orders.stream()
+                .filter(o -> o.getDineType() != null && o.getCreatedAt() != null)
+                .min(Comparator.comparing(DineInOrderEntity::getCreatedAt))
+                .map(o -> DineType.parse(o.getDineType()));
     }
 
     /** ออเดอร์โต๊ะที่ยังไม่ถูกยกเลิกและยังไม่จ่าย */

@@ -23,7 +23,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Set;
 
@@ -50,13 +52,25 @@ class DineInBillServiceTest {
     @Mock private PaymentStateService paymentStateService;
     @Mock private PaymentReconciler paymentReconciler;
 
+    private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
+    /** เวลาปัจจุบันที่ใช้ทดสอบ — 20:00 */
+    private static final LocalDateTime NOW = LocalDateTime.of(2026, 11, 6, 20, 0);
+
     private DineInBillService service;
 
     @BeforeEach
     void setUp() {
+        Clock fixed = Clock.fixed(NOW.atZone(BANGKOK).toInstant(), BANGKOK);
         service = new DineInBillService(dineInOrderRepository, dineInOrderItemRepository, orderRepository,
                 orderItemRepository, pricingService, stockService, cartService, paymentStateService,
-                paymentReconciler, new OrderCodeGenerator(), new ProductQuantityHelper());
+                paymentReconciler, new OrderCodeGenerator(), new ProductQuantityHelper(), fixed);
+    }
+
+    private static DineInOrderEntity buffetOrder(long id, LocalDateTime createdAt) {
+        DineInOrderEntity o = tableOrder(id, "5", "completed", 0);
+        o.setDineType("buffet");
+        o.setCreatedAt(createdAt);
+        return o;
     }
 
     private static DineInOrderEntity tableOrder(long id, String table, String status, double total) {
@@ -98,9 +112,10 @@ class DineInBillServiceTest {
                 return o;
             });
 
-            DineInOrderEntity saved = service.placeTableOrder(EMAIL, " 5 ");
+            DineInOrderEntity saved = service.placeTableOrder(EMAIL, " 5 ", DineInBillService.DineType.ALACARTE);
 
             assertThat(saved.getTableNo()).isEqualTo("5");
+            assertThat(saved.getDineType()).isEqualTo("alacarte");
             assertThat(saved.getTotal()).isEqualTo(560.0);
             assertThat(saved.getOrdCode()).isEqualTo(new OrderCodeGenerator().generate(3L));
             ArgumentCaptor<DineInOrderItemEntity> item = ArgumentCaptor.forClass(DineInOrderItemEntity.class);
@@ -114,9 +129,103 @@ class DineInBillServiceTest {
         @Test
         @DisplayName("ไม่ระบุโต๊ะ → 400 ไม่แตะตะกร้า")
         void missingTable_rejected() {
-            assertThatThrownBy(() -> service.placeTableOrder(EMAIL, "  "))
+            assertThatThrownBy(() -> service.placeTableOrder(EMAIL, "  ", DineInBillService.DineType.ALACARTE))
                     .isInstanceOf(DineInBillService.BillException.class);
             verifyNoInteractions(pricingService, cartService);
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("บุฟเฟต์ 100 นาที")
+    class BuffetTime {
+
+        private void cartWithOneItem() {
+            PricingService.PricedLine line = new PricingService.PricedLine(
+                    1L, "ชาไทย", "img", "drink", null, 45.0, 1, 1, 45.0);
+            when(pricingService.priceCart(EMAIL, CartMode.DINE_IN))
+                    .thenReturn(new PricingService.PricedCart(List.of(line), 45.0, 0.0, 45.0));
+            when(dineInOrderRepository.save(any())).thenAnswer(inv -> {
+                DineInOrderEntity o = inv.getArgument(0);
+                if (o.getId() == null)
+                    o.setId(9L);
+                return o;
+            });
+        }
+
+        @Test
+        @DisplayName("ออเดอร์แรกเกิน 100 นาทีแล้ว → 409 ไม่แตะตะกร้า/stock")
+        void over100Minutes_rejected() {
+            when(dineInOrderRepository.findByEmailOrderByCreatedAtDesc(EMAIL))
+                    .thenReturn(List.of(buffetOrder(1L, NOW.minusMinutes(100))));
+
+            assertThatThrownBy(() -> service.placeTableOrder(EMAIL, "5", DineInBillService.DineType.BUFFET))
+                    .isInstanceOfSatisfying(DineInBillService.BillException.class,
+                            e -> assertThat(e.status()).isEqualTo(HttpStatus.CONFLICT));
+            verifyNoInteractions(pricingService, stockService, cartService);
+        }
+
+        @Test
+        @DisplayName("ยังไม่ครบ 100 นาที → สั่งได้ นับจากออเดอร์แรก ไม่ใช่ออเดอร์ล่าสุด")
+        void within100Minutes_allowed() {
+            cartWithOneItem();
+            when(dineInOrderRepository.findByEmailOrderByCreatedAtDesc(EMAIL)).thenReturn(List.of(
+                    buffetOrder(2L, NOW.minusMinutes(5)), buffetOrder(1L, NOW.minusMinutes(99))));
+
+            DineInOrderEntity saved = service.placeTableOrder(EMAIL, "5", DineInBillService.DineType.BUFFET);
+
+            assertThat(saved.getDineType()).isEqualTo("buffet");
+            assertThat(saved.getCreatedAt()).isEqualTo(NOW);
+        }
+
+        @Test
+        @DisplayName("ส่ง alacarte มากลางมื้อบุฟเฟต์ → ยังเป็นบุฟเฟต์และโดนจำกัดเวลา")
+        void cannotSwitchToAlaCarteToDodgeLimit() {
+            when(dineInOrderRepository.findByEmailOrderByCreatedAtDesc(EMAIL))
+                    .thenReturn(List.of(buffetOrder(1L, NOW.minusMinutes(120))));
+
+            assertThatThrownBy(() -> service.placeTableOrder(EMAIL, "5", DineInBillService.DineType.ALACARTE))
+                    .isInstanceOf(DineInBillService.BillException.class);
+        }
+
+        @Test
+        @DisplayName("à la carte ไม่จำกัดเวลา")
+        void alaCarte_noLimit() {
+            cartWithOneItem();
+            DineInOrderEntity old = tableOrder(1L, "5", "completed", 50.0);
+            old.setDineType("alacarte");
+            old.setCreatedAt(NOW.minusHours(5));
+            when(dineInOrderRepository.findByEmailOrderByCreatedAtDesc(EMAIL)).thenReturn(List.of(old));
+
+            assertThat(service.placeTableOrder(EMAIL, "5", DineInBillService.DineType.BUFFET).getDineType())
+                    .isEqualTo("alacarte");
+        }
+
+        @Test
+        @DisplayName("currentSession — สิ้นสุดเวลาสั่ง = ออเดอร์แรก + 100 นาที")
+        void sessionEndsAt() {
+            when(dineInOrderRepository.findByEmailOrderByCreatedAtDesc(EMAIL))
+                    .thenReturn(List.of(buffetOrder(1L, NOW.minusMinutes(40))));
+
+            DineInBillService.DiningSession s = service.currentSession(EMAIL, "5").orElseThrow();
+
+            assertThat(s.orderingEndsAt()).isEqualTo(NOW.plusMinutes(60));
+            assertThat(s.secondsLeftAt(NOW)).isEqualTo(60L * 60);
+            assertThat(s.canOrderAt(NOW)).isTrue();
+        }
+
+        @Test
+        @DisplayName("เรียกบิล → ประเภทมาจากมื้อ (บุฟเฟต์) แม้ client ส่ง alacarte")
+        void bill_usesRecordedType() {
+            echoSaves();
+            when(dineInOrderRepository.findByEmailOrderByCreatedAtDesc(EMAIL))
+                    .thenReturn(List.of(buffetOrder(1L, NOW.minusMinutes(30))));
+
+            OrderEntity bill = service.prepareBill(EMAIL, "5", DineInBillService.DineType.ALACARTE, 2,
+                    CheckoutMethod.CARD);
+
+            assertThat(bill.getDineType()).isEqualTo("buffet");
+            assertThat(bill.getTotal()).isEqualTo(DineInBillService.BUFFET_PRICE_PER_PERSON * 2);
         }
     }
 

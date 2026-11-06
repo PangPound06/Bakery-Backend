@@ -92,12 +92,14 @@ public class DineInOrderController {
     /**
      * ส่งตะกร้าทานในร้านเข้าครัว
      *
-     * body: { tableNo } — รายการและราคามาจากตะกร้าทานในร้านของลูกค้า (คิดราคาที่ server)
+     * body: { tableNo, dineType } — รายการและราคามาจากตะกร้าทานในร้านของลูกค้า (คิดราคาที่ server)
+     * dineType ใช้เฉพาะออเดอร์แรกของมื้อ / บุฟเฟต์ที่หมดเวลาแล้ว → 409
      */
     @PostMapping("/orders")
     public ResponseEntity<?> createOrder(@RequestBody Map<String, Object> request) {
         try {
-            DineInOrderEntity saved = billService.placeTableOrder(currentEmail(), asString(request.get("tableNo")));
+            DineInOrderEntity saved = billService.placeTableOrder(currentEmail(), asString(request.get("tableNo")),
+                    DineInBillService.DineType.parse(asString(request.get("dineType"))));
             return ResponseEntity.ok(Map.of(
                     "success", true,
                     "orderId", saved.getId(),
@@ -159,6 +161,28 @@ public class DineInOrderController {
             paymentStateService.discardUnpaid(bill.getId(), "เริ่มการชำระเงินไม่สำเร็จ");
             return fail(HttpStatus.INTERNAL_SERVER_ERROR, "เรียกเก็บบิลไม่สำเร็จ กรุณาลองใหม่");
         }
+    }
+
+    /**
+     * มื้อที่กำลังทาน — หน้าเว็บใช้แสดงเวลาบุฟเฟต์ที่เหลือ และปิดปุ่มสั่งเมื่อหมดเวลา
+     *
+     * เวลาที่เหลือคิดที่ server (secondsLeft) หน้าเว็บนับถอยหลังต่อเอง ไม่ต้องเทียบนาฬิกาเครื่องลูกค้า
+     */
+    @GetMapping("/session")
+    public ResponseEntity<?> session(@RequestParam(required = false) String tableNo) {
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("success", true);
+        resp.put("buffetMinutes", DineInBillService.BUFFET_DURATION.toMinutes());
+        billService.currentSession(currentEmail(), tableNo).ifPresentOrElse(s -> {
+            resp.put("active", true);
+            resp.put("dineType", s.dineType().value());
+            resp.put("canOrder", s.canOrderAt(billService.now()));
+            resp.put("secondsLeft", s.secondsLeftAt(billService.now()));
+        }, () -> {
+            resp.put("active", false);
+            resp.put("canOrder", true);
+        });
+        return ResponseEntity.ok(resp);
     }
 
     private static ResponseEntity<?> fail(HttpStatus status, String message) {

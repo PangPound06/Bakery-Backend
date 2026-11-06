@@ -32,6 +32,18 @@ public class DineInOrderEntity {
     @Column(name = "bill_order_id")
     private Long billOrderId;
 
+    /** alacarte / buffet — ประเภทการทานของมื้อนี้ (null = ออเดอร์ก่อนมีคอลัมน์นี้ ถือเป็น à la carte) */
+    @Column(name = "dine_type")
+    private String dineType;
+
+    public String getDineType() {
+        return dineType;
+    }
+
+    public void setDineType(String dineType) {
+        this.dineType = dineType;
+    }
+
     // Getters & Setters
     public Long getId() {
         return id;
