@@ -1,5 +1,6 @@
 package com.app.my_project.service;
 
+import com.app.my_project.common.CartMode;
 import com.app.my_project.common.PaymentMethods;
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
@@ -37,6 +38,7 @@ class PaymentStateServiceTransferTest {
     @Mock private OrderRepository orderRepository;
     @Mock private OrderItemRepository orderItemRepository;
     @Mock private StockService stockService;
+    @Mock private CartService cartService;
     @Mock private JdbcTemplate jdbcTemplate;
 
     @InjectMocks
@@ -71,7 +73,7 @@ class PaymentStateServiceTransferTest {
             assertThat(order.getSlipImage()).isEqualTo(SLIP);
             assertThat(order.getPaymentId()).isEqualTo(REF);
             verify(orderRepository).save(order);
-            verify(jdbcTemplate).update("DELETE FROM tb_cart WHERE email = ?", EMAIL);
+            verify(cartService).clear(EMAIL, CartMode.ONLINE);
         }
 
         @Test
@@ -160,7 +162,7 @@ class PaymentStateServiceTransferTest {
         }
 
         @Test
-        @DisplayName("ปฏิเสธ → failed + cancelled + คืน stock")
+        @DisplayName("ปฏิเสธ → failed + cancelled + คืน stock แต่ไม่ลบ (เก็บสลิปเป็นหลักฐาน)")
         void reject_releasesStock() {
             OrderEntity order = transferOrder(PaymentStateService.VERIFYING);
             OrderItemEntity item = new OrderItemEntity();
@@ -175,6 +177,19 @@ class PaymentStateServiceTransferTest {
             assertThat(order.getOrderStatus()).isEqualTo("cancelled");
             assertThat(order.getNote()).contains("ยอดไม่ตรง");
             verify(stockService).batchIncreaseStock(argThat(list -> list.size() == 1));
+            verify(orderRepository, never()).delete(any(OrderEntity.class));
+        }
+
+        @Test
+        @DisplayName("ยืนยันบิลหน้าร้าน → paid + ล้างตะกร้าทานในร้าน (ไม่แตะตะกร้าออนไลน์)")
+        void confirm_dineInBill_clearsDineInCart() {
+            OrderEntity order = transferOrder(PaymentStateService.VERIFYING);
+            order.setOrderType("dine-in");
+
+            assertThat(service.confirmTransfer(1L, "boss@empbakery.com"))
+                    .isEqualTo(PaymentStateService.TransferResult.OK);
+            verify(cartService).clear(EMAIL, CartMode.DINE_IN);
+            verify(cartService, never()).clear(EMAIL, CartMode.ONLINE);
         }
 
         @Test
@@ -188,15 +203,17 @@ class PaymentStateServiceTransferTest {
     }
 
     @Test
-    @DisplayName("findUnsubmittedTransfers — ค้นเฉพาะโอนพร้อมเพย์ที่ยังรอโอน")
-    void findUnsubmitted_queriesAwaitingTransfersOnly() {
+    @DisplayName("findAbandoned — เฉพาะรอจ่ายของวิธีที่ลูกค้าจ่ายเอง (ไม่รวมเงินสด POS / รอตรวจยอดโอน)")
+    void findAbandoned_queriesSelfServeAwaitingOnly() {
         LocalDateTime cutoff = LocalDateTime.now();
         OrderEntity stale = new OrderEntity();
         stale.setId(7L);
-        when(orderRepository.findByPaymentMethodAndPaymentStatusAndCreatedAtBefore(
-                PaymentMethods.PROMPTPAY_TRANSFER, PaymentStateService.AWAITING, cutoff))
+        when(orderRepository.findByPaymentStatusAndPaymentMethodInAndCreatedAtBefore(
+                eq(PaymentStateService.AWAITING), argThat(methods -> methods.containsAll(List.of(
+                        PaymentMethods.QR_PROMPTPAY, PaymentMethods.CARD, PaymentMethods.PROMPTPAY_TRANSFER))
+                        && !methods.contains(PaymentMethods.CASH)), eq(cutoff)))
                 .thenReturn(List.of(stale));
 
-        assertThat(service.findUnsubmittedTransfers(cutoff)).containsExactly(7L);
+        assertThat(service.findAbandoned(cutoff)).containsExactly(stale);
     }
 }

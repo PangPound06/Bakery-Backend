@@ -1,5 +1,6 @@
 package com.app.my_project.service;
 
+import com.app.my_project.common.PaymentMethods;
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.repository.OrderRepository;
 import com.stripe.exception.StripeException;
@@ -95,8 +96,10 @@ public class PaymentReconciler {
             return outcomeOf(order);
         String intentId = order.getStripePaymentIntentId();
         try {
-            Outcome current = apply(order, stripeService.retrieveIntent(intentId));
-            if (current != Outcome.UNPAID)
+            PaymentIntent intent = stripeService.retrieveIntent(intentId);
+            Outcome current = apply(order, intent);
+            // ถูกยกเลิกไปแล้ว (เช่น webhook canceled) — ไม่มีทางจ่ายได้อีก ไม่ต้องสั่งยกเลิกซ้ำ
+            if (current != Outcome.UNPAID || "canceled".equals(intent.getStatus()))
                 return current;
             if (stripeService.cancelIntent(intentId))
                 return Outcome.UNPAID;
@@ -106,6 +109,42 @@ public class PaymentReconciler {
             log.warn("ปิดรอบจ่ายเงิน {} ไม่สำเร็จ: {}", intentId, e.getMessage());
             return Outcome.IN_FLIGHT;
         }
+    }
+
+    /**
+     * ปิดรอบจ่ายเงินกับ Stripe แล้วลบ order ทิ้งถ้าไม่ได้เงิน
+     *
+     * @return true = ลบแล้ว, false = ได้เงิน / กำลังตัดเงิน / สถานะเปลี่ยนไปแล้ว (order ยังอยู่)
+     */
+    public boolean discardIfUnpaid(OrderEntity order, String reason) {
+        if (settle(order) != Outcome.UNPAID)
+            return false;
+        return paymentStateService.discardUnpaid(order.getId(), reason);
+    }
+
+    /**
+     * Stripe แจ้งว่า intent จ่ายไม่สำเร็จหรือถูกยกเลิก (webhook)
+     *
+     * ═══ ไม่ลบทุกกรณี ═══
+     * - intent ไม่ใช่ตัวปัจจุบันของ order: order ถูกนำไปใช้ต่อด้วย intent ใหม่แล้ว
+     *   event ของ intent เก่าที่เรายกเลิกเองมาถึงทีหลัง ห้ามลบ order ที่ลูกค้ากำลังจ่ายอยู่
+     * - บัตรถูกปฏิเสธ (payment_failed): ลูกค้ายังลองบัตรใบอื่นในฟอร์มเดิมได้
+     *   order จะถูกลบเมื่อลูกค้ากดยกเลิกหรือเกินเวลา (UnpaidOrderSweeper)
+     *
+     * @param canceled true = payment_intent.canceled, false = payment_intent.payment_failed
+     */
+    public void onIntentEnded(Long orderId, String intentId, boolean canceled, String reason) {
+        OrderEntity order = orderRepository.findById(orderId).orElse(null);
+        if (order == null || !intentId.equals(order.getStripePaymentIntentId())
+                || !PaymentStateService.AWAITING.equals(order.getPaymentStatus())) {
+            log.debug("ข้าม event ของ {} — ไม่ใช่รอบจ่ายเงินปัจจุบันของ order {}", intentId, orderId);
+            return;
+        }
+        if (!canceled && PaymentMethods.CARD.equals(order.getPaymentMethod())) {
+            log.info("บัตรของ order {} ถูกปฏิเสธ ({}) — รอลูกค้าลองใหม่", orderId, reason);
+            return;
+        }
+        discardIfUnpaid(order, reason);
     }
 
     private Outcome apply(OrderEntity order, PaymentIntent intent) {

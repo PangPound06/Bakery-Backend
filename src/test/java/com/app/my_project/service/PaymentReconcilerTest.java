@@ -1,5 +1,6 @@
 package com.app.my_project.service;
 
+import com.app.my_project.common.PaymentMethods;
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.repository.OrderRepository;
 import com.stripe.exception.ApiConnectionException;
@@ -14,9 +15,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -146,6 +149,83 @@ class PaymentReconcilerTest {
             assertThat(reconciler.settle(awaiting(1L, "online", null)))
                     .isEqualTo(PaymentReconciler.Outcome.UNPAID);
             verify(stripeService, never()).retrieveIntent(anyString());
+        }
+    }
+
+    @Nested
+    @DisplayName("discardIfUnpaid() / onIntentEnded() — ลบรอบที่ไม่ได้เงิน")
+    class Discard {
+
+        @Test
+        @DisplayName("ยกเลิก intent ได้ → ลบ order")
+        void unpaid_discards() throws Exception {
+            OrderEntity o = awaiting(1L, "online", "pi_1");
+            when(stripeService.retrieveIntent("pi_1")).thenReturn(intent("pi_1", "requires_action"));
+            when(stripeService.cancelIntent("pi_1")).thenReturn(true);
+            when(paymentStateService.discardUnpaid(1L, "หมดเวลา")).thenReturn(true);
+
+            assertThat(reconciler.discardIfUnpaid(o, "หมดเวลา")).isTrue();
+        }
+
+        @Test
+        @DisplayName("จ่ายแล้วพอดี → ไม่ลบ")
+        void paid_kept() throws Exception {
+            OrderEntity o = awaiting(1L, "online", "pi_1");
+            when(stripeService.retrieveIntent("pi_1")).thenReturn(intent("pi_1", "succeeded"));
+
+            assertThat(reconciler.discardIfUnpaid(o, "หมดเวลา")).isFalse();
+            verify(paymentStateService, never()).discardUnpaid(anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("intent ถูกยกเลิกไปแล้ว → ลบเลย ไม่สั่งยกเลิกซ้ำ")
+        void alreadyCanceled_noSecondCancel() throws Exception {
+            OrderEntity o = awaiting(1L, "online", "pi_1");
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(o));
+            when(stripeService.retrieveIntent("pi_1")).thenReturn(intent("pi_1", "canceled"));
+
+            reconciler.onIntentEnded(1L, "pi_1", true, "ยกเลิก");
+
+            verify(stripeService, never()).cancelIntent(anyString());
+            verify(paymentStateService).discardUnpaid(1L, "ยกเลิก");
+        }
+
+        @Test
+        @DisplayName("event ของ intent เก่า (order ถูกใช้ต่อด้วย intent ใหม่) → ไม่แตะ")
+        void staleIntent_ignored() {
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(awaiting(1L, "online", "pi_new")));
+
+            reconciler.onIntentEnded(1L, "pi_old", true, "ยกเลิก");
+
+            verifyNoInteractions(stripeService);
+            verify(paymentStateService, never()).discardUnpaid(anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("บัตรถูกปฏิเสธ → เก็บ order ไว้ให้ลูกค้าลองบัตรใบอื่น")
+        void cardDeclined_kept() {
+            OrderEntity o = awaiting(1L, "online", "pi_1");
+            o.setPaymentMethod(PaymentMethods.CARD);
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(o));
+
+            reconciler.onIntentEnded(1L, "pi_1", false, "card_declined");
+
+            verifyNoInteractions(stripeService);
+            verify(paymentStateService, never()).discardUnpaid(anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("QR PromptPay หมดอายุ (payment_failed) → ลบ")
+        void promptPayFailed_discards() throws Exception {
+            OrderEntity o = awaiting(1L, "online", "pi_1");
+            o.setPaymentMethod(PaymentMethods.QR_PROMPTPAY);
+            when(orderRepository.findById(1L)).thenReturn(Optional.of(o));
+            when(stripeService.retrieveIntent("pi_1")).thenReturn(intent("pi_1", "requires_payment_method"));
+            when(stripeService.cancelIntent("pi_1")).thenReturn(true);
+
+            reconciler.onIntentEnded(1L, "pi_1", false, "expired");
+
+            verify(paymentStateService).discardUnpaid(1L, "expired");
         }
     }
 

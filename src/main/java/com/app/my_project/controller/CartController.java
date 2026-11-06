@@ -3,6 +3,7 @@ package com.app.my_project.controller;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,12 +11,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.app.my_project.common.CartMode;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.algorithms.Algorithm;
 
 import javax.sql.DataSource;
 
+/**
+ * ตะกร้าสินค้า — ลูกค้าหนึ่งคนมีสองใบ แยกด้วย ?mode=online|dinein (ไม่ส่ง = online)
+ *
+ * ของที่หยิบตอนสั่งออนไลน์จะไม่ปนกับของที่สั่งตอนนั่งกินในร้าน
+ * แก้/ลบรายการอ้างด้วย id ของแถว จึงไม่ต้องระบุ mode
+ */
 @RestController
 @RequestMapping("/api/cart")
 public class CartController {
@@ -231,6 +239,11 @@ public class CartController {
         }
     }
 
+    private static ResponseEntity<?> invalidMode() {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(java.util.Collections.singletonMap("error", "โหมดตะกร้าไม่ถูกต้อง"));
+    }
+
     private Long getProductStock(Connection conn, Long productId) throws SQLException {
         String sql = "SELECT \"stockQuantity\" FROM tb_products WHERE id = ?";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -243,7 +256,13 @@ public class CartController {
 
     @PostMapping("/add")
     public ResponseEntity<?> addToCart(@RequestHeader("Authorization") String authHeader,
+            @RequestParam(value = "mode", required = false) String modeParam,
             @RequestBody AddToCartRequest request) {
+        Optional<CartMode> parsedMode = CartMode.parse(modeParam);
+        if (parsedMode.isEmpty())
+            return invalidMode();
+        String mode = parsedMode.get().value();
+
         try (Connection conn = getConnection()) {
             String email = getUserEmailFromToken(conn, authHeader.replace("Bearer ", ""));
             if (email == null)
@@ -268,10 +287,12 @@ public class CartController {
             }
 
             if (currentStock == 9999L) {
-                String countSql = "SELECT COALESCE(SUM(quantity), 0) FROM tb_cart WHERE email = ? AND product_id = ?";
+                String countSql = "SELECT COALESCE(SUM(quantity), 0) FROM tb_cart "
+                        + "WHERE email = ? AND product_id = ? AND cart_mode = ?";
                 try (PreparedStatement countStmt = conn.prepareStatement(countSql)) {
                     countStmt.setString(1, email);
                     countStmt.setLong(2, request.getProductId());
+                    countStmt.setString(3, mode);
                     try (ResultSet countRs = countStmt.executeQuery()) {
                         if (countRs.next()) {
                             int totalInCart = countRs.getInt(1);
@@ -293,12 +314,13 @@ public class CartController {
             String selectedOption = request.getSelectedOption();
 
             try (PreparedStatement checkStmt = conn.prepareStatement(
-                    "SELECT id, quantity, price FROM tb_cart WHERE email = ? AND product_id = ? AND " +
+                    "SELECT id, quantity, price FROM tb_cart WHERE email = ? AND product_id = ? AND cart_mode = ? AND " +
                             "(selected_option = ? OR (selected_option IS NULL AND ? IS NULL))")) {
                 checkStmt.setString(1, email);
                 checkStmt.setLong(2, request.getProductId());
-                checkStmt.setString(3, selectedOption);
+                checkStmt.setString(3, mode);
                 checkStmt.setString(4, selectedOption);
+                checkStmt.setString(5, selectedOption);
 
                 try (ResultSet rs = checkStmt.executeQuery()) {
                     if (rs.next()) {
@@ -328,8 +350,8 @@ public class CartController {
                         double subtotal = displayQtyForInsert * productPrice;
 
                         try (PreparedStatement insertStmt = conn.prepareStatement(
-                                "INSERT INTO tb_cart (email, product_id, product_name, quantity, price, category, image, subtotal, selected_option) "
-                                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                                "INSERT INTO tb_cart (email, product_id, product_name, quantity, price, category, image, subtotal, "
+                                        + "selected_option, cart_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                             insertStmt.setString(1, email);
                             insertStmt.setLong(2, request.getProductId());
                             insertStmt.setString(3, productName);
@@ -339,6 +361,7 @@ public class CartController {
                             insertStmt.setString(7, productImage);
                             insertStmt.setDouble(8, subtotal);
                             insertStmt.setString(9, selectedOption);
+                            insertStmt.setString(10, mode);
                             insertStmt.executeUpdate();
                         }
                     }
@@ -355,7 +378,12 @@ public class CartController {
     }
 
     @GetMapping("")
-    public ResponseEntity<?> getCart(@RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> getCart(@RequestHeader("Authorization") String authHeader,
+            @RequestParam(value = "mode", required = false) String modeParam) {
+        Optional<CartMode> mode = CartMode.parse(modeParam);
+        if (mode.isEmpty())
+            return invalidMode();
+
         try (Connection conn = getConnection()) {
             String email = getUserEmailFromToken(conn, authHeader.replace("Bearer ", ""));
             if (email == null)
@@ -372,8 +400,9 @@ public class CartController {
                             "p.\"stockQuantity\" as stock, c.selected_option " +
                             "FROM tb_cart c " +
                             "LEFT JOIN tb_products p ON c.product_id = p.id " +
-                            "WHERE c.email = ? ORDER BY c.id DESC")) {
+                            "WHERE c.email = ? AND c.cart_mode = ? ORDER BY c.id DESC")) {
                 stmt.setString(1, email);
+                stmt.setString(2, mode.get().value());
 
                 try (ResultSet rs = stmt.executeQuery()) {
                     List<CartItem> items = new ArrayList<>();
@@ -496,14 +525,21 @@ public class CartController {
     }
 
     @DeleteMapping("/clear")
-    public ResponseEntity<?> clearCart(@RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> clearCart(@RequestHeader("Authorization") String authHeader,
+            @RequestParam(value = "mode", required = false) String modeParam) {
+        Optional<CartMode> mode = CartMode.parse(modeParam);
+        if (mode.isEmpty())
+            return invalidMode();
+
         try (Connection conn = getConnection()) {
             String email = getUserEmailFromToken(conn, authHeader.replace("Bearer ", ""));
             if (email == null)
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
 
-            try (PreparedStatement deleteStmt = conn.prepareStatement("DELETE FROM tb_cart WHERE email = ?")) {
+            try (PreparedStatement deleteStmt = conn.prepareStatement(
+                    "DELETE FROM tb_cart WHERE email = ? AND cart_mode = ?")) {
                 deleteStmt.setString(1, email);
+                deleteStmt.setString(2, mode.get().value());
                 deleteStmt.executeUpdate();
             }
             return ResponseEntity.ok().build();

@@ -1,5 +1,6 @@
 package com.app.my_project.service;
 
+import com.app.my_project.common.CartMode;
 import com.app.my_project.common.PaymentMethods;
 import com.app.my_project.entity.OrderEntity;
 import com.app.my_project.entity.OrderItemEntity;
@@ -13,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -30,9 +30,15 @@ import java.util.Set;
  * เพราะทั้งสองอย่างมาจากฝั่งลูกค้า
  *
  * ═══ สถานะที่ใช้ ═══
- * Stripe: awaiting_payment → paid | failed | expired
- * โอนพร้อมเพย์: awaiting_payment → awaiting_verification (ลูกค้าแจ้งโอน) → paid | failed
- *               awaiting_payment → expired (ไม่แจ้งโอนภายในเวลา)
+ * Stripe: awaiting_payment → paid
+ * โอนพร้อมเพย์: awaiting_payment → awaiting_verification (ลูกค้าแจ้งโอน) → paid | failed (แอดมินไม่พบยอด)
+ *
+ * ═══ รอบจ่ายเงินที่ไม่ได้เงิน = ลบทิ้ง ═══
+ * ลูกค้ากดยกเลิก / QR หมดอายุ / ไม่แจ้งโอนในเวลา / เริ่มจ่ายไม่สำเร็จ → คืน stock แล้วลบ order ทิ้ง (discardUnpaid)
+ * ไม่เก็บแถว expired ไว้ เพราะไม่มีเงินไหลผ่าน — สั่งแล้วยกเลิกวันละครั้งก็ได้แถวขยะวันละแถว
+ * ที่เก็บไว้มีแค่ order ที่จ่ายแล้ว รอตรวจยอดโอน และที่แอดมินปฏิเสธสลิป (เก็บไว้เป็นหลักฐานสลิป)
+ *
+ * failed / expired ยังเป็นค่าที่ถูกต้อง เพราะมีข้อมูลเก่าในฐานข้อมูลและสลิปที่ถูกปฏิเสธ
  */
 @Service
 public class PaymentStateService {
@@ -47,29 +53,35 @@ public class PaymentStateService {
     public static final String VERIFYING = "awaiting_verification";
 
     /**
-     * แถวที่ยังไม่จ่ายจะถูกเขียนทับได้เฉพาะที่สร้างไว้ไม่เกินกี่นาที
+     * อายุของรอบจ่ายเงินที่ยังไม่ได้เงิน — เกินนี้ UnpaidOrderSweeper คืน stock แล้วลบทิ้ง
      *
-     * ตรงกับเวลาที่ QR หมดอายุ — เกินจากนี้ถือว่าคนละรอบการซื้อ ไม่ใช่การกดจ่ายซ้ำ
-     * ถ้าไม่จำกัดเวลา การซื้อวันนี้จะไปเขียนทับแถวที่ทิ้งไว้เมื่อวาน
-     * แล้วเลข order จะเดินถอยหลัง ไล่ดูตามลำดับเวลาไม่ได้
+     * ภายในเวลานี้ ลูกค้าที่กดจ่ายใหม่ (สลับวิธีจ่าย / กดย้อนกลับ) จะได้แถวเดิมกลับมาใช้ต่อ
+     * เกินจากนี้ถือว่าคนละรอบการซื้อ
      */
-    private static final int REUSE_WINDOW_MINUTES = 30;
+    public static final Duration UNPAID_TTL = Duration.ofMinutes(30);
 
-    /** เวลาที่ลูกค้ามีให้โอนพร้อมเพย์แล้วกดแจ้งโอน ก่อน order ถูกปิดและคืน stock */
-    public static final Duration TRANSFER_PAY_WINDOW = Duration.ofMinutes(30);
+    /** เวลาที่ลูกค้ามีให้โอนพร้อมเพย์แล้วกดแจ้งโอน (หน้าเว็บนับถอยหลังตามนี้) */
+    public static final Duration TRANSFER_PAY_WINDOW = UNPAID_TTL;
+
+    /** วิธีจ่ายที่ลูกค้าจ่ายเองออนไลน์ — order ที่ค้างรอจ่ายนานเกินจะถูกเก็บกวาด (ไม่รวมเงินสด POS) */
+    private static final List<String> SELF_SERVE_METHODS = List.of(
+            PaymentMethods.QR_PROMPTPAY, PaymentMethods.CARD, PaymentMethods.PROMPTPAY_TRANSFER);
 
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final StockService stockService;
+    private final CartService cartService;
     private final JdbcTemplate jdbcTemplate;
 
     public PaymentStateService(OrderRepository orderRepository,
             OrderItemRepository orderItemRepository,
             StockService stockService,
+            CartService cartService,
             JdbcTemplate jdbcTemplate) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.stockService = stockService;
+        this.cartService = cartService;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -110,7 +122,9 @@ public class PaymentStateService {
     public void markPaid(Long orderId, String paymentIntentId) {
         Optional<OrderEntity> opt = orderRepository.findById(orderId);
         if (opt.isEmpty()) {
-            log.error("webhook อ้างถึง order {} ที่ไม่มีอยู่จริง", orderId);
+            // ไม่ควรเกิด — order ถูกลบหลังยกเลิก intent กับ Stripe สำเร็จเท่านั้น
+            log.error("⚠️ ได้เงินจาก {} แต่ไม่พบ order {} — ตรวจสอบใน Stripe Dashboard แล้วคืนเงินหรือออกบิลด้วยมือ",
+                    paymentIntentId, orderId);
             return;
         }
 
@@ -122,10 +136,6 @@ public class PaymentStateService {
 
         order.setPaymentId(paymentIntentId);
         order.setStripePaymentIntentId(paymentIntentId);
-        // ถ้า order เคยถูกยกเลิกเพราะหมดเวลา แล้วเงินเข้าทีหลัง → ปลุกกลับมา
-        if ("cancelled".equals(order.getOrderStatus())) {
-            order.setOrderStatus("pending");
-        }
         finalizePaid(order);
     }
 
@@ -159,6 +169,7 @@ public class PaymentStateService {
      * ลูกค้ากด "แจ้งโอนแล้ว" พร้อมสลิป → รอแอดมินตรวจยอด
      *
      * ยังไม่ใช่ paid — แค่หยุดนับเวลาหมดอายุ และล้างตะกร้าเพราะลูกค้าถือว่าสั่งซื้อเสร็จแล้ว
+     * (ใช้ได้ทั้งออนไลน์และบิลหน้าร้าน)
      * ส่งสลิปใหม่ได้ (เช่น แนบผิดรูป) ตราบใดที่แอดมินยังไม่ตัดสิน
      *
      * @param slipUrl       รูปสลิปที่ตรวจ QR แล้วและเก็บบน Cloudinary
@@ -176,7 +187,7 @@ public class PaymentStateService {
         order.setSlipImage(slipUrl);
         order.setPaymentId(slipReference);
         orderRepository.save(order);
-        clearCart(email);
+        cartService.clear(email, CartMode.forOrderType(order.getOrderType()));
 
         log.info("🧾 order {} ({}) ลูกค้าแจ้งโอนพร้อมสลิปแล้ว รอตรวจสอบ", orderId, order.getOrdCode());
         return TransferResult.OK;
@@ -216,30 +227,41 @@ public class PaymentStateService {
         return TransferResult.OK;
     }
 
-    /** แอดมินไม่พบยอดโอน → ปิด order และคืน stock */
+    /**
+     * แอดมินไม่พบยอดโอน → คืน stock แล้วปิดเป็น failed
+     *
+     * order นี้ไม่ถูกลบเหมือนรอบที่ยกเลิกเอง — ลูกค้าแนบสลิปมาแล้ว ต้องเก็บไว้เป็นหลักฐานถ้ามีข้อโต้แย้ง
+     */
     @Transactional
     public TransferResult rejectTransfer(Long orderId, String reason, String adminEmail) {
         Optional<OrderEntity> opt = orderRepository.findById(orderId);
         if (opt.isEmpty())
             return TransferResult.NOT_FOUND;
-        TransferResult check = checkDecidable(opt.get());
+        OrderEntity order = opt.get();
+        TransferResult check = checkDecidable(order);
         if (check != TransferResult.OK)
             return check;
 
         String detail = (reason == null || reason.isBlank()) ? "ไม่พบยอดโอน" : reason.trim();
-        releaseOrder(orderId, FAILED, detail + " (โดย " + adminEmail + ")");
+        returnReserved(order);
+        order.setPaymentStatus(FAILED);
+        order.setOrderStatus("cancelled");
+        order.setNote(appendNote(order.getNote(), detail + " (โดย " + adminEmail + ")"));
+        orderRepository.save(order);
+
+        log.info("↩️ order {} ({}) แอดมินปฏิเสธยอดโอน: {}", orderId, order.getOrdCode(), detail);
         return TransferResult.OK;
     }
 
     /**
-     * order โอนพร้อมเพย์ที่ลูกค้ายังไม่แจ้งโอน และสร้างไว้ก่อนเวลาที่กำหนด
+     * order ที่ลูกค้าเริ่มจ่ายเองแต่ค้างรอจ่ายนานเกิน UNPAID_TTL — ให้ UnpaidOrderSweeper เก็บกวาด
      *
      * ไม่รวม awaiting_verification — order ที่แจ้งโอนแล้วต้องรอแอดมินตัดสินเสมอ
+     * ไม่รวมเงินสด (POS) — แอดมินเป็นคนจัดการเอง
      */
-    public List<Long> findUnsubmittedTransfers(LocalDateTime createdBefore) {
-        return orderRepository.findByPaymentMethodAndPaymentStatusAndCreatedAtBefore(
-                PaymentMethods.PROMPTPAY_TRANSFER, AWAITING, createdBefore)
-                .stream().map(OrderEntity::getId).toList();
+    public List<OrderEntity> findAbandoned(LocalDateTime createdBefore) {
+        return orderRepository.findByPaymentStatusAndPaymentMethodInAndCreatedAtBefore(
+                AWAITING, SELF_SERVE_METHODS, createdBefore);
     }
 
     /** order โอนพร้อมเพย์ที่ยังไม่มีใครตัดสิน (ยังไม่ paid / ไม่ถูกปิด) */
@@ -256,127 +278,94 @@ public class PaymentStateService {
         order.setPaymentStatus(PAID);
         orderRepository.save(order);
 
-        clearCart(order.getEmail());
+        cartService.clear(order.getEmail(), CartMode.forOrderType(order.getOrderType()));
         closeDineInOrders(order.getId());
         log.info("✅ order {} ({}) จ่ายเงินสำเร็จ", order.getId(), order.getOrdCode());
     }
 
     /**
-     * จ่ายไม่สำเร็จ / หมดเวลา → คืน stock ที่จองไว้ + ปิด order
+     * รอบจ่ายเงินที่ไม่ได้เงิน → คืน stock ที่จองไว้ แล้วลบ order กับรายการทิ้ง
      *
-     * @param newPaymentStatus FAILED หรือ EXPIRED
+     * ⚠️ ผู้เรียกต้องปิด intent กับ Stripe ก่อนเสมอ (PaymentReconciler.settle ได้ UNPAID)
+     * ไม่งั้นลูกค้าอาจจ่ายเข้ามาหลังลบ แล้วเงินเข้าโดยไม่มี order
+     *
+     * ไม่ลบ order ที่จ่ายแล้วหรือแจ้งโอนแล้ว — ปลอดภัยแม้ถูกเรียกซ้ำหรือสลับลำดับกับ webhook
+     *
+     * @return true = ลบแล้ว, false = ไม่มี order นี้ หรือสถานะไม่ใช่รอบที่ทิ้งได้
      */
     @Transactional
-    public void releaseOrder(Long orderId, String newPaymentStatus, String reason) {
-        Optional<OrderEntity> opt = orderRepository.findById(orderId);
-        if (opt.isEmpty())
-            return;
+    public boolean discardUnpaid(Long orderId, String reason) {
+        return orderRepository.findById(orderId)
+                .map(order -> discard(order, reason))
+                .orElse(false);
+    }
 
-        OrderEntity order = opt.get();
-
-        // จ่ายไปแล้วก็อย่าไปยุ่ง (เช่น event มาสลับลำดับ)
-        if (PAID.equals(order.getPaymentStatus())) {
-            log.warn("order {} จ่ายแล้ว ไม่ปล่อยของคืน (reason={})", orderId, reason);
-            return;
+    private boolean discard(OrderEntity order, String reason) {
+        String status = order.getPaymentStatus();
+        boolean discardable = AWAITING.equals(status)
+                // แถว expired/failed สมัยก่อนที่ยังไม่ถูกล้าง — stock คืนไปแล้ว ลบอย่างเดียว
+                || EXPIRED.equals(status)
+                || (FAILED.equals(status) && order.getSlipImage() == null);
+        if (!discardable) {
+            log.warn("ไม่ลบ order {} สถานะ {} (reason={})", order.getId(), status, reason);
+            return false;
         }
-        // ปล่อยไปแล้วรอบหนึ่ง อย่าคืน stock ซ้ำ
-        if (FAILED.equals(order.getPaymentStatus()) || EXPIRED.equals(order.getPaymentStatus())) {
-            return;
+
+        if (AWAITING.equals(status)) {
+            returnReserved(order);
+        } else if (isDineInBill(order)) {
+            unlinkDineInOrders(order.getId());
         }
+        orderItemRepository.deleteByOrderId(order.getId());
+        orderRepository.delete(order);
 
-        restoreStock(orderId);
-
-        order.setPaymentStatus(newPaymentStatus);
-        order.setOrderStatus("cancelled");
-        order.setNote(appendNote(order.getNote(), reason));
-        orderRepository.save(order);
-
-        log.info("↩️ order {} ปล่อยคืน ({}): {}", orderId, newPaymentStatus, reason);
+        log.info("🗑️ ลบรอบจ่ายเงินที่ไม่ได้เงิน order {} ({}) ของ {}: {}",
+                order.getId(), order.getOrdCode(), order.getEmail(), reason);
+        return true;
     }
 
     /**
-     * เตรียม order สำหรับการกดจ่ายเงินรอบใหม่ของลูกค้าคนเดิม
+     * เตรียม order สำหรับการกดจ่ายเงินรอบใหม่ของลูกค้าคนเดิม (ออนไลน์)
      *
      * ═══ กติกาเดียวของเมธอดนี้ ═══
-     * ลูกค้าหนึ่งคนมีแถวที่ยังไม่จ่ายได้ "แถวเดียว" เท่านั้น
-     * ทุกครั้งที่กดจ่ายเงินใหม่ ให้เขียนทับแถวเดิม ไม่สร้างแถวใหม่
-     *
-     * เดิมทีทุกครั้งที่กดจ่ายจะได้ id ใหม่ ลูกค้าที่สลับบัตร → QR หรือกดย้อนกลับ
-     * จึงกินเลข order ไปหลายใบทั้งที่ซื้อครั้งเดียว
+     * ลูกค้าหนึ่งคนมีแถวที่รอจ่ายได้ "แถวเดียว" — กดจ่ายใหม่ (สลับวิธีจ่าย / กดย้อนกลับมา)
+     * ให้เขียนทับแถวเดิม ไม่สร้างแถวใหม่ เลข order จึงคงเดิมจนกว่าจะจ่ายสำเร็จ
      *
      * ═══ ทำอะไรบ้าง ═══
-     * 1. หาแถวที่ยังไม่จ่ายของ email นี้ (awaiting / expired / failed) ที่สร้างไม่เกิน 30 นาที
-     * 2. เอาแถวล่าสุดมาใช้ต่อ ที่เหลือปล่อยคืน stock แล้วปิดทิ้ง
-     * 3. คืน stock ที่แถวนั้นจองไว้ (ถ้ายังจองอยู่) → ลบ item เดิม → เขียน item ใหม่ตามตะกร้า → จอง stock ใหม่
-     * 4. รีเซ็ตยอด สถานะ และ intent เก่าให้เป็นใบรอจ่ายที่สะอาด
-     *
-     * ord_code กับ id คงเดิม ลูกค้าจึงเห็นเลขเดียวตลอดจนกว่าจะจ่ายสำเร็จ
-     * เมื่อจ่ายแล้วแถวนั้นไม่เข้าเงื่อนไขอีก การซื้อครั้งถัดไปจึงได้แถวใหม่ตามปกติ
+     * 1. หาแถว awaiting_payment ออนไลน์ของ email นี้ที่ไม่ถูกล็อก
+     * 2. แถวที่เก่าเกิน UNPAID_TTL และแถวเกินมา → ลบทิ้ง (คืน stock)
+     * 3. แถวล่าสุดที่ยังไม่หมดอายุ → คืน stock เดิม ลบ item เดิม เขียน item ใหม่ตามตะกร้า จอง stock ใหม่
      *
      * ═══ ห้ามเขียนทับ order ที่อาจจ่ายแล้ว ═══
      * ผู้เรียกต้องผ่าน PaymentReconciler.settleAwaiting() ก่อนเสมอ
-     * order ที่ Stripe ยืนยันว่าจ่ายแล้วจะกลายเป็น paid ไปแล้ว ส่วนที่ยังไม่แน่ใจส่งมาใน locked
-     * และใช้เฉพาะ order ออนไลน์ — บิลหน้าร้านมีรอบจ่ายเงินของตัวเอง
+     * — intent ของทุกแถวที่ไม่ถูกล็อกถูกยกเลิกกับ Stripe แล้ว ลบหรือเขียนทับได้อย่างปลอดภัย
      *
-     * @param locked id ของ order ที่ห้ามแตะ (กำลังตัดเงิน / ถาม Stripe ไม่สำเร็จ)
-     * @return แถวที่เขียนทับแล้ว (null = ไม่มีแถวค้าง ให้ไปสร้างใหม่) + intent ที่ต้องยกเลิกกับ Stripe
+     * @param locked id ของ order ที่ห้ามแตะ (จ่ายแล้ว / กำลังตัดเงิน / ถาม Stripe ไม่สำเร็จ)
+     * @return แถวที่เขียนทับแล้ว หรือ null = ไม่มีแถวค้าง ให้ไปสร้างใหม่
      */
     @Transactional
-    public ReuseResult prepareForNewIntent(String email, Set<Long> locked, List<CartLine> wanted,
+    public OrderEntity prepareForNewIntent(String email, Set<Long> locked, List<CartLine> wanted,
             double subtotal, double shipping, double total) {
 
-        List<OrderEntity> unpaid = new ArrayList<>();
-        unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, AWAITING));
-        unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, EXPIRED));
-        unpaid.addAll(orderRepository.findByEmailAndPaymentStatus(email, FAILED));
-        unpaid.removeIf(o -> locked.contains(o.getId()) || !"online".equals(o.getOrderType()));
+        LocalDateTime cutoff = LocalDateTime.now().minus(UNPAID_TTL);
+        List<OrderEntity> open = orderRepository.findByEmailAndPaymentStatus(email, AWAITING).stream()
+                .filter(o -> "online".equals(o.getOrderType()) && !locked.contains(o.getId()))
+                .sorted(Comparator.comparing(OrderEntity::getId).reversed())
+                .toList();
 
-        List<String> intentsToCancel = new ArrayList<>();
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(REUSE_WINDOW_MINUTES);
-
-        List<OrderEntity> open = new ArrayList<>();
-        for (OrderEntity o : unpaid) {
-            if (o.getCreatedAt() != null && o.getCreatedAt().isAfter(cutoff)) {
-                open.add(o);
-            } else if (AWAITING.equals(o.getPaymentStatus())) {
-                // ค้างเกินเวลาแล้ว ปล่อยของคืนแต่ไม่เอามาเขียนทับ
-                restoreStock(o.getId());
-                o.setPaymentStatus(EXPIRED);
-                o.setOrderStatus("cancelled");
-                o.setNote(appendNote(o.getNote(), "ยกเลิกอัตโนมัติ: เกินเวลาชำระเงิน"));
-                orderRepository.save(o);
-                addIntent(intentsToCancel, o);
-            }
+        OrderEntity keep = open.stream()
+                .filter(o -> o.getCreatedAt() != null && o.getCreatedAt().isAfter(cutoff))
+                .findFirst()
+                .orElse(null);
+        for (OrderEntity other : open) {
+            if (other != keep)
+                discard(other, "ลูกค้าเริ่มการชำระเงินรอบใหม่");
         }
-
-        if (open.isEmpty()) {
-            return new ReuseResult(null, intentsToCancel);
-        }
-
-        open.sort(Comparator.comparing(OrderEntity::getId).reversed());
-        OrderEntity keep = open.get(0);
-
-        // แถวค้างอื่นๆ ปิดทิ้งให้หมด จะได้เหลือใบเดียวจริงๆ
-        for (int i = 1; i < open.size(); i++) {
-            OrderEntity other = open.get(i);
-            if (AWAITING.equals(other.getPaymentStatus())) {
-                restoreStock(other.getId());
-                other.setPaymentStatus(EXPIRED);
-                other.setOrderStatus("cancelled");
-                other.setNote(appendNote(other.getNote(), "ยกเลิกอัตโนมัติ: ลูกค้าเริ่มการชำระเงินใหม่"));
-                orderRepository.save(other);
-                log.info("ปิด order ค้าง {} ของ {}", other.getId(), email);
-            }
-            addIntent(intentsToCancel, other);
-        }
-
-        // intent เก่าของแถวที่จะใช้ต่อก็ต้องตาย ไม่งั้นลูกค้ามี QR จ่ายได้สองใบ
-        addIntent(intentsToCancel, keep);
+        if (keep == null)
+            return null;
 
         // ── เขียนรายการใหม่ทับของเดิม ──
-        if (AWAITING.equals(keep.getPaymentStatus())) {
-            restoreStock(keep.getId()); // ยังจองอยู่ คืนก่อนแล้วค่อยจองตามตะกร้าใหม่
-        }
+        returnReserved(keep);
         orderItemRepository.deleteByOrderId(keep.getId());
 
         for (CartLine line : wanted) {
@@ -408,22 +397,12 @@ public class PaymentStateService {
 
         log.info("ใช้ order {} ({}) ต่อสำหรับการจ่ายเงินรอบใหม่ของ {}",
                 keep.getId(), keep.getOrdCode(), email);
-
-        return new ReuseResult(keep, intentsToCancel);
-    }
-
-    private void addIntent(List<String> bucket, OrderEntity order) {
-        String id = order.getStripePaymentIntentId();
-        if (id != null && !id.isBlank()) {
-            bucket.add(id);
-        }
+        return keep;
     }
 
     /** หนึ่งบรรทัดในตะกร้าที่คิดราคาแล้ว — quantity เป็น "ชิ้น" เหมือนใน tb_order_items */
     public record CartLine(Long productId, String productName, String selectedOption,
             int rawQuantity, double unitPrice, String image) {}
-
-    public record ReuseResult(OrderEntity reusable, List<String> intentsToCancel) {}
 
     // ═════════════════════════════════════════════════════════════════
     // HELPERS
@@ -449,55 +428,37 @@ public class PaymentStateService {
     }
 
     /**
-     * บิลหน้าร้านถูกปล่อยคืน → ปลดล็อกออเดอร์โต๊ะให้กดเรียกเก็บใหม่ได้
+     * บิลหน้าร้านไม่ได้เงิน → ปลดออเดอร์โต๊ะออกจากบิล ให้กดเรียกเก็บใหม่ได้
+     *
+     * ล้างทั้งสถานะและ bill_order_id — บิลถูกลบไปแล้ว ไม่มีแถวให้ชี้
      */
     private void unlinkDineInOrders(Long billOrderId) {
-        try {
-            // เก็บ bill_order_id ไว้ ล้างแต่สถานะจ่ายเงิน
-            // ถ้าล้างเส้นเชื่อมทิ้ง ตอนกดเรียกบิลใหม่จะหาแถวเดิมไม่เจอแล้วสร้างแถวใหม่
-            jdbcTemplate.update(
-                    "UPDATE tb_dinein_orders SET payment_status = NULL " +
-                            "WHERE bill_order_id = ? AND payment_status <> 'paid'",
-                    billOrderId);
-        } catch (Exception e) {
-            log.error("ปลดล็อกออเดอร์หน้าร้านของบิล {} ไม่สำเร็จ", billOrderId, e);
-        }
+        jdbcTemplate.update(
+                "UPDATE tb_dinein_orders SET payment_status = NULL, bill_order_id = NULL " +
+                        "WHERE bill_order_id = ? AND payment_status IS DISTINCT FROM 'paid'",
+                billOrderId);
     }
 
     /**
-     * คืน stock ที่จองไว้
+     * คืนของที่ order นี้จองไว้
      *
-     * ⚠️ บิลหน้าร้านข้ามขั้นตอนนี้ — ของถูกตัด stock ไปตอนลูกค้าสั่งที่โต๊ะแล้ว
-     * และกินไปเรียบร้อย การคืน stock ตอนบิลหมดอายุจะทำให้ของงอกขึ้นมาเอง
+     * ออนไลน์: คืน stock ตามรายการ
+     * บิลหน้าร้าน: ไม่คืน stock — ของถูกตัดตอนสั่งที่โต๊ะและกินไปแล้ว แค่ปลดออเดอร์โต๊ะออกจากบิล
      */
-    private void restoreStock(Long orderId) {
-        if (isDineInBill(orderId)) {
-            log.info("order {} เป็นบิลหน้าร้าน ไม่คืน stock", orderId);
-            unlinkDineInOrders(orderId);
+    private void returnReserved(OrderEntity order) {
+        if (isDineInBill(order)) {
+            unlinkDineInOrders(order.getId());
             return;
         }
-        List<OrderItemEntity> items = orderItemRepository.findByOrderId(orderId);
-        if (items.isEmpty())
-            return;
-        List<StockService.StockChange> changes = items.stream()
+        List<StockService.StockChange> changes = orderItemRepository.findByOrderId(order.getId()).stream()
                 .map(i -> new StockService.StockChange(i.getProductId(), i.getQuantity()))
                 .toList();
-        stockService.batchIncreaseStock(changes);
+        if (!changes.isEmpty())
+            stockService.batchIncreaseStock(changes);
     }
 
-    private boolean isDineInBill(Long orderId) {
-        return orderRepository.findById(orderId)
-                .map(o -> "dine-in".equals(o.getOrderType()))
-                .orElse(false);
-    }
-
-    private void clearCart(String email) {
-        try {
-            jdbcTemplate.update("DELETE FROM tb_cart WHERE email = ?", email);
-        } catch (Exception e) {
-            // ตะกร้าเคลียร์ไม่ได้ไม่ควรทำให้ webhook fail แล้ว Stripe ยิงซ้ำ
-            log.error("เคลียร์ตะกร้าของ {} ไม่สำเร็จ", email, e);
-        }
+    private static boolean isDineInBill(OrderEntity order) {
+        return "dine-in".equals(order.getOrderType());
     }
 
     private static String appendNote(String existing, String addition) {

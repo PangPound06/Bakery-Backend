@@ -410,7 +410,7 @@ class OrderControllerTest {
         }
 
         @Test
-        @DisplayName("ยังรอจ่าย Stripe → ปิด QR กับ Stripe ก่อน แล้วค่อยคืน stock")
+        @DisplayName("ยังรอจ่าย → ปิด QR กับ Stripe ก่อน แล้วลบรอบที่ไม่ได้เงินทิ้ง")
         void awaitingPayment_settlesWithStripeFirst() {
             OrderEntity order = makeOrder(1L);
             order.setPaymentStatus(PaymentStateService.AWAITING);
@@ -418,7 +418,7 @@ class OrderControllerTest {
             when(paymentReconciler.settle(order)).thenReturn(PaymentReconciler.Outcome.UNPAID);
 
             assertThat(controller.cancelOrder(1L, USER_AUTH).getStatusCode().value()).isEqualTo(200);
-            verify(paymentStateService).releaseOrder(eq(1L), eq(PaymentStateService.EXPIRED), any());
+            verify(paymentStateService).discardUnpaid(eq(1L), any());
             verify(orderService, never()).cancelOrder(any());
         }
 
@@ -431,7 +431,7 @@ class OrderControllerTest {
             when(paymentReconciler.settle(order)).thenReturn(PaymentReconciler.Outcome.PAID);
 
             assertThat(controller.cancelOrder(1L, USER_AUTH).getStatusCode().value()).isEqualTo(409);
-            verify(paymentStateService, never()).releaseOrder(any(), any(), any());
+            verify(paymentStateService, never()).discardUnpaid(any(), any());
         }
     }
 

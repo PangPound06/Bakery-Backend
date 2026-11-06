@@ -1,5 +1,6 @@
 package com.app.my_project.service;
 
+import com.app.my_project.common.CartMode;
 import com.app.my_project.common.ProductQuantityHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,15 +69,16 @@ public class PricingService {
      * คำนวณราคาตะกร้าของ user ใหม่ทั้งใบจาก tb_products
      * ตรวจ stock / isAvailable ไปด้วยในตัว
      *
+     * @param mode ตะกร้าใบไหน — ทานในร้านไม่มีค่าจัดส่ง
      * @throws CartValidationException ถ้าตะกร้าว่าง สินค้าหมด หรือปิดขาย
      */
-    public PricedCart priceCart(String email) {
+    public PricedCart priceCart(String email, CartMode mode) {
         String sql = "SELECT c.product_id, c.quantity, c.selected_option, " +
                 "       p.name, p.price, p.options, p.category, p.image, " +
                 "       p.\"stockQuantity\" AS stock_qty, p.\"isAvailable\" AS is_available " +
                 "FROM tb_cart c " +
                 "JOIN tb_products p ON p.id = c.product_id " +
-                "WHERE c.email = ? " +
+                "WHERE c.email = ? AND c.cart_mode = ? " +
                 "ORDER BY c.id";
 
         List<PricedLine> lines = new ArrayList<>();
@@ -92,7 +94,7 @@ public class PricingService {
                 rs.getString("image"),
                 rs.getLong("stock_qty"),
                 rs.getBoolean("is_available")
-        }, email);
+        }, email, mode.value());
 
         if (rows.isEmpty()) {
             throw new CartValidationException("ตะกร้าสินค้าว่าง");
@@ -133,7 +135,7 @@ public class PricingService {
         }
 
         double subtotal = round2(lines.stream().mapToDouble(PricedLine::lineTotal).sum());
-        double shipping = shippingFor(subtotal);
+        double shipping = mode == CartMode.ONLINE ? shippingFor(subtotal) : 0.0;
         return new PricedCart(lines, subtotal, shipping, round2(subtotal + shipping));
     }
 

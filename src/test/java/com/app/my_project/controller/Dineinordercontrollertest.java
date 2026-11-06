@@ -4,8 +4,13 @@ import com.app.my_project.entity.DineInOrderEntity;
 import com.app.my_project.entity.DineInOrderItemEntity;
 import com.app.my_project.repository.DineInOrderItemRepository;
 import com.app.my_project.repository.DineInOrderRepository;
-import com.app.my_project.repository.OrderItemRepository;
-import com.app.my_project.repository.OrderRepository;
+import com.app.my_project.common.CheckoutMethod;
+import com.app.my_project.entity.OrderEntity;
+import com.app.my_project.service.DineInBillService;
+import com.app.my_project.service.PaymentStarter;
+import com.app.my_project.service.PaymentStateService;
+import com.app.my_project.service.PricingService;
+import com.app.my_project.service.StripeService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -29,15 +34,15 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
  * Test DineInOrderController
  *
  * Focus:
- *  - createOrder: ดึง email จาก SecurityContext, default status=pending
- *  - getMyOrders: filter ออเดอร์ active เท่านั้น (ไม่ใช่ cancelled/paid)
+ *  - createOrder / request-bill: ส่งต่อให้ DineInBillService (ตรรกะทดสอบใน DineInBillServiceTest)
+ *  - getMyOrders: แปลงออเดอร์ active เป็น JSON
  *  - updateStatus: validate ว่า status ที่ส่งมาอยู่ใน VALID_STATUSES
  *  - cancelOrder: ห้ามยกเลิก completed/paid
  *  - getOrderDetail: 404 ถ้าไม่พบ
@@ -51,8 +56,10 @@ class DineInOrderControllerTest {
     @Mock private DineInOrderRepository dineInOrderRepository;
     @Mock private DineInOrderItemRepository dineInOrderItemRepository;
     @Mock private DataSource dataSource;
-    @Mock private OrderRepository orderRepository;
-    @Mock private OrderItemRepository orderItemRepository;
+    @Mock private DineInBillService billService;
+    @Mock private PaymentStarter paymentStarter;
+    @Mock private PaymentStateService paymentStateService;
+    @Mock private StripeService stripeService;
 
     @InjectMocks
     private DineInOrderController controller;
@@ -84,103 +91,122 @@ class DineInOrderControllerTest {
 
     // ═════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("POST /api/dinein/orders")
+    @DisplayName("POST /api/dinein/orders — ส่งตะกร้าทานในร้านเข้าครัว")
     class CreateOrderTests {
 
-        private Map<String, Object> createRequest() {
-            Map<String, Object> req = new HashMap<>();
-            req.put("tableNo", "5");
-            req.put("subtotal", 100.0);
-            req.put("total", 100.0);
-            req.put("items", List.of()); // จะ skip ลด stock
-            return req;
-        }
-
         @Test
-        @DisplayName("✅ Happy path: สร้าง order → email จาก token, status=pending")
-        void createOrder_validRequest_setsEmailAndPendingStatus() {
+        @DisplayName("✅ ใช้ email จาก token และส่งแค่เลขโต๊ะให้ service (ไม่รับราคาจาก body)")
+        void createOrder_usesTokenEmailAndTableOnly() {
             mockUser("user@example.com");
-            when(dineInOrderRepository.save(any())).thenAnswer(inv -> {
-                DineInOrderEntity e = inv.getArgument(0);
-                e.setId(1L);
-                return e;
-            });
+            DineInOrderEntity saved = makeOrder(1L, "user@example.com", "5", "pending", null);
+            saved.setOrdCode("ORD1");
+            when(billService.placeTableOrder("user@example.com", "5")).thenReturn(saved);
 
-            ResponseEntity<?> response = controller.createOrder(createRequest());
+            ResponseEntity<?> response = controller.createOrder(Map.of("tableNo", "5", "total", 1));
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-
-            ArgumentCaptor<DineInOrderEntity> captor =
-                    ArgumentCaptor.forClass(DineInOrderEntity.class);
-            verify(dineInOrderRepository, atLeastOnce()).save(captor.capture());
-            DineInOrderEntity saved = captor.getValue();
-            assertThat(saved.getEmail()).isEqualTo("user@example.com");
-            assertThat(saved.getOrderStatus()).isEqualTo("pending");
-            assertThat(saved.getTableNo()).isEqualTo("5");
+            assertThat(response.getBody()).asString().contains("ORD1");
         }
 
         @Test
-        @DisplayName("subtotal=null → exception → 400")
-        void createOrder_missingSubtotal_returns400() {
+        @DisplayName("ตะกร้าว่าง → 400 พร้อมข้อความ")
+        void createOrder_emptyCart_returns400() {
             mockUser("user@example.com");
-            Map<String, Object> req = new HashMap<>();
-            req.put("tableNo", "5");
-            req.put("total", 100.0);
-            // ไม่มี subtotal
+            when(billService.placeTableOrder("user@example.com", "5"))
+                    .thenThrow(new PricingService.CartValidationException("ตะกร้าสินค้าว่าง"));
 
-            ResponseEntity<?> response = controller.createOrder(req);
+            ResponseEntity<?> response = controller.createOrder(Map.of("tableNo", "5"));
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(response.getBody()).asString().contains("ตะกร้าสินค้าว่าง");
         }
     }
 
     // ═════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("GET /api/dinein/my-orders — active orders only")
-    class GetMyOrdersTests {
+    @DisplayName("POST /api/dinein/request-bill")
+    class RequestBillTests {
 
         @Test
-        @DisplayName("✅ คืนเฉพาะ order ที่ active (ไม่ใช่ cancelled, ไม่ใช่ paid)")
-        void getMyOrders_filtersActiveOnly() {
+        @DisplayName("วิธีจ่ายที่ไม่รู้จัก → 400 ไม่สร้างบิล")
+        void unknownMethod_400() {
             mockUser("user@example.com");
 
-            DineInOrderEntity active = makeOrder(1L, "user@example.com", "5", "pending", "unpaid");
-            DineInOrderEntity cancelled = makeOrder(2L, "user@example.com", "5", "cancelled", "unpaid");
-            DineInOrderEntity paid = makeOrder(3L, "user@example.com", "5", "completed", "paid");
+            ResponseEntity<?> response = controller.requestBill(Map.of("paymentMethod", "bitcoin"));
 
-            when(dineInOrderRepository.findByEmailOrderByCreatedAtDesc("user@example.com"))
-                    .thenReturn(List.of(active, cancelled, paid));
-            when(dineInOrderItemRepository.findByOrderId(any())).thenReturn(List.of());
-
-            ResponseEntity<?> response = controller.getMyOrders(null);
-
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> result = (List<Map<String, Object>>) response.getBody();
-
-            // เฉพาะ active 1 รายการ
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0)).containsEntry("id", 1L);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            verifyNoInteractions(billService);
         }
 
         @Test
-        @DisplayName("filter ตาม tableNo → คืนเฉพาะที่ตรง")
-        void getMyOrders_filterByTable() {
+        @DisplayName("✅ บัตร → เตรียมบิลแล้วส่ง clientSecret กลับ")
+        void card_startsStripeCard() throws Exception {
             mockUser("user@example.com");
+            when(stripeService.isEnabled()).thenReturn(true);
+            OrderEntity bill = new OrderEntity();
+            bill.setId(9L);
+            bill.setOrdCode("ORD9");
+            bill.setTotal(250.0);
+            when(billService.prepareBill(eq("user@example.com"), eq("5"),
+                    eq(DineInBillService.DineType.ALACARTE), eq(1), eq(CheckoutMethod.CARD))).thenReturn(bill);
+            when(paymentStarter.start(bill, 250.0, "user@example.com", CheckoutMethod.CARD))
+                    .thenReturn(Map.of("clientSecret", "cs_test"));
 
-            DineInOrderEntity table5 = makeOrder(1L, "user@example.com", "5", "pending", "unpaid");
-            DineInOrderEntity table7 = makeOrder(2L, "user@example.com", "7", "pending", "unpaid");
+            ResponseEntity<?> response = controller.requestBill(
+                    Map.of("tableNo", "5", "dineType", "alacarte", "paymentMethod", "card"));
 
-            when(dineInOrderRepository.findByEmailOrderByCreatedAtDesc("user@example.com"))
-                    .thenReturn(List.of(table5, table7));
-            when(dineInOrderItemRepository.findByOrderId(any())).thenReturn(List.of());
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).asString().contains("cs_test").contains("ORD9");
+        }
+
+        @Test
+        @DisplayName("ออกช่องทางจ่ายเงินไม่สำเร็จ → ลบบิลทิ้ง ไม่ค้าง")
+        void startFails_discardsBill() throws Exception {
+            mockUser("user@example.com");
+            OrderEntity bill = new OrderEntity();
+            bill.setId(9L);
+            bill.setTotal(250.0);
+            when(billService.prepareBill(any(), any(), any(), anyInt(), eq(CheckoutMethod.TRANSFER))).thenReturn(bill);
+            when(paymentStarter.start(any(), anyDouble(), any(), any())).thenThrow(new IllegalStateException("qr"));
+
+            ResponseEntity<?> response = controller.requestBill(Map.of("tableNo", "5", "paymentMethod", "transfer"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+            verify(paymentStateService).discardUnpaid(eq(9L), any());
+        }
+
+        @Test
+        @DisplayName("แจ้งโอนค้างอยู่ → 409 ตาม service")
+        void conflict_passesStatusThrough() {
+            mockUser("user@example.com");
+            when(billService.prepareBill(any(), any(), any(), anyInt(), any()))
+                    .thenThrow(new DineInBillService.BillException(HttpStatus.CONFLICT, "แจ้งโอนแล้ว"));
+
+            ResponseEntity<?> response = controller.requestBill(Map.of("paymentMethod", "transfer"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("GET /api/dinein/my-orders")
+    class GetMyOrdersTests {
+
+        @Test
+        @DisplayName("✅ คืนออเดอร์ active จาก service พร้อมรายการ")
+        void getMyOrders_mapsActiveOrders() {
+            mockUser("user@example.com");
+            DineInOrderEntity active = makeOrder(1L, "user@example.com", "5", "pending", null);
+            when(billService.activeTableOrders("user@example.com", "5")).thenReturn(List.of(active));
+            when(dineInOrderItemRepository.findByOrderId(1L)).thenReturn(List.of());
 
             ResponseEntity<?> response = controller.getMyOrders("5");
 
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> result = (List<Map<String, Object>>) response.getBody();
             assertThat(result).hasSize(1);
-            assertThat(result.get(0)).containsEntry("tableNo", "5");
+            assertThat(result.get(0)).containsEntry("id", 1L).containsEntry("tableNo", "5");
         }
     }
 

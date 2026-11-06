@@ -19,6 +19,7 @@ import java.sql.ResultSet;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -55,7 +56,7 @@ class CartControllerTest {
     void addToCartUnauthorized() throws Exception {
         when(dataSource.getConnection()).thenReturn(conn);
         ResponseEntity<?> r =
-                controller.addToCart("Bearer invalid", new CartController.AddToCartRequest());
+                controller.addToCart("Bearer invalid", null, new CartController.AddToCartRequest());
         assertThat(r.getStatusCode().value()).isEqualTo(401);
     }
 
@@ -63,7 +64,7 @@ class CartControllerTest {
     @DisplayName("getCart: token ไม่ถูกต้อง → 401")
     void getCartUnauthorized() throws Exception {
         when(dataSource.getConnection()).thenReturn(conn);
-        ResponseEntity<?> r = controller.getCart("Bearer invalid");
+        ResponseEntity<?> r = controller.getCart("Bearer invalid", null);
         assertThat(r.getStatusCode().value()).isEqualTo(401);
     }
 
@@ -85,10 +86,20 @@ class CartControllerTest {
     }
 
     @Test
+    @DisplayName("mode ที่ไม่รู้จัก → 400 ก่อนแตะฐานข้อมูล")
+    void unknownMode_400() throws Exception {
+        assertThat(controller.getCart("Bearer x", "drive-thru").getStatusCode().value()).isEqualTo(400);
+        assertThat(controller.clearCart("Bearer x", "drive-thru").getStatusCode().value()).isEqualTo(400);
+        assertThat(controller.addToCart("Bearer x", "drive-thru", new CartController.AddToCartRequest())
+                .getStatusCode().value()).isEqualTo(400);
+        verifyNoInteractions(dataSource);
+    }
+
+    @Test
     @DisplayName("clearCart: token ไม่ถูกต้อง → 401")
     void clearUnauthorized() throws Exception {
         when(dataSource.getConnection()).thenReturn(conn);
-        ResponseEntity<?> r = controller.clearCart("Bearer invalid");
+        ResponseEntity<?> r = controller.clearCart("Bearer invalid", null);
         assertThat(r.getStatusCode().value()).isEqualTo(401);
     }
 
@@ -107,7 +118,7 @@ class CartControllerTest {
 
         // ไม่ตั้ง productId → ต้องได้ 400
         ResponseEntity<?> r =
-                controller.addToCart("Bearer " + validToken(), new CartController.AddToCartRequest());
+                controller.addToCart("Bearer " + validToken(), null, new CartController.AddToCartRequest());
 
         assertThat(r.getStatusCode().value()).isEqualTo(400);
     }

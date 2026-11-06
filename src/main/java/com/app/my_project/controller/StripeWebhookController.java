@@ -1,5 +1,6 @@
 package com.app.my_project.controller;
 
+import com.app.my_project.service.PaymentReconciler;
 import com.app.my_project.service.PaymentStateService;
 import com.app.my_project.service.StripeService;
 import com.stripe.exception.SignatureVerificationException;
@@ -53,13 +54,16 @@ public class StripeWebhookController {
     private static final Logger log = LoggerFactory.getLogger(StripeWebhookController.class);
 
     private final PaymentStateService paymentStateService;
+    private final PaymentReconciler paymentReconciler;
     private final StripeService stripeService;
     private final String webhookSecret;
 
     public StripeWebhookController(PaymentStateService paymentStateService,
+            PaymentReconciler paymentReconciler,
             StripeService stripeService,
             @Value("${stripe.webhook-secret:}") String webhookSecret) {
         this.paymentStateService = paymentStateService;
+        this.paymentReconciler = paymentReconciler;
         this.stripeService = stripeService;
         this.webhookSecret = webhookSecret;
         if (webhookSecret == null || webhookSecret.isBlank()) {
@@ -137,20 +141,18 @@ public class StripeWebhookController {
                     String reason = pi.getLastPaymentError() != null
                             ? pi.getLastPaymentError().getMessage()
                             : "การชำระเงินไม่สำเร็จ";
-                    paymentStateService.releaseOrder(orderId,
-                            PaymentStateService.FAILED, reason);
+                    paymentReconciler.onIntentEnded(orderId, pi.getId(), false, reason);
                 }
             }
 
-            // ═══ ถูกยกเลิก (ลูกค้ากดยกเลิก หรือเราสั่ง cancel ตอนเริ่มรอบใหม่) ═══
+            // ═══ ถูกยกเลิก (ปกติเราสั่งเองแล้วลบ order ไปก่อน event มาถึง) ═══
             case "payment_intent.canceled" -> {
                 PaymentIntent pi = intent(event);
                 if (pi == null)
                     return;
                 Long orderId = orderIdOf(pi);
                 if (orderId != null)
-                    paymentStateService.releaseOrder(orderId,
-                            PaymentStateService.EXPIRED, "ยกเลิกการชำระเงิน");
+                    paymentReconciler.onIntentEnded(orderId, pi.getId(), true, "ยกเลิกการชำระเงิน");
             }
 
             default -> log.debug("ไม่ได้จัดการ event ชนิด {}", type);

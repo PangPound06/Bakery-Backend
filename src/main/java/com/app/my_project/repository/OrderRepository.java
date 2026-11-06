@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -29,12 +30,12 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long>, JpaSp
 
     Optional<OrderEntity> findByOrdCode(String ordCode);
 
-    /** หา order ที่ยังไม่จ่ายของ user (awaiting_payment / expired / failed) */
+    /** order ของ user ตามสถานะการจ่ายเงิน */
     List<OrderEntity> findByEmailAndPaymentStatus(String email, String paymentStatus);
 
-    /** order ค้างจ่ายของวิธีชำระเงินหนึ่งที่สร้างก่อนเวลาที่กำหนด — ใช้ปิด order ที่ถูกทิ้งไว้ */
-    List<OrderEntity> findByPaymentMethodAndPaymentStatusAndCreatedAtBefore(
-            String paymentMethod, String paymentStatus, LocalDateTime createdBefore);
+    /** order ที่ค้างสถานะนี้ของวิธีชำระเงินเหล่านี้ และสร้างก่อนเวลาที่กำหนด — ใช้เก็บกวาด order ที่ถูกทิ้งไว้ */
+    List<OrderEntity> findByPaymentStatusAndPaymentMethodInAndCreatedAtBefore(
+            String paymentStatus, Collection<String> paymentMethods, LocalDateTime createdBefore);
 
     /** สลิป (payment_id) นี้ถูกใช้กับ order อื่นแล้วหรือยัง */
     boolean existsByPaymentIdAndIdNot(String paymentId, Long id);

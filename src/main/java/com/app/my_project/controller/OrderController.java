@@ -311,12 +311,13 @@ public class OrderController {
         if (opt.isEmpty())
             return ResponseEntity.notFound().build();
 
-        // ยังรอจ่ายผ่าน Stripe อยู่ → ปิด QR/ฟอร์มบัตรก่อน ไม่งั้นลูกค้ายังจ่ายเข้ามาได้หลังยกเลิก
+        // ยังรอจ่ายอยู่ → ปิด QR/ฟอร์มบัตรก่อน ไม่งั้นลูกค้ายังจ่ายเข้ามาได้หลังยกเลิก
+        // ไม่ได้เงิน = ไม่เก็บแถว คืน stock แล้วลบทิ้ง
         OrderEntity order = opt.get();
         if (PaymentStateService.AWAITING.equals(order.getPaymentStatus())) {
             if (paymentReconciler.settle(order) != PaymentReconciler.Outcome.UNPAID)
                 return paidRequiresRefund();
-            paymentStateService.releaseOrder(id, PaymentStateService.EXPIRED, "ยกเลิกคำสั่งซื้อ");
+            paymentStateService.discardUnpaid(id, "ยกเลิกคำสั่งซื้อ");
             return ResponseEntity.ok(Map.of("success", true));
         }
 

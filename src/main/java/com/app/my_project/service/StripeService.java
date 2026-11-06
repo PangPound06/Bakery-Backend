@@ -92,18 +92,6 @@ public class StripeService {
      * ต้องรอ webhook payment_intent.succeeded เท่านั้นถึงจะถือว่าจ่ายแล้ว
      */
     public PromptPayQr createPromptPayIntent(OrderEntity order,
-            PricingService.PricedCart cart,
-            String customerEmail) throws StripeException {
-        return createPromptPayIntent(order, cart.total(), customerEmail);
-    }
-
-    /**
-     * เวอร์ชันที่รับยอดเป็นตัวเลขตรงๆ
-     *
-     * บิลหน้าร้านไม่มีตะกร้า — ยอดมาจากการรวมออเดอร์ที่เสิร์ฟไปแล้ว
-     * หรือจากราคาบุฟเฟต์คูณจำนวนคน จึงส่งเป็น double เข้ามาแทน PricedCart
-     */
-    public PromptPayQr createPromptPayIntent(OrderEntity order,
             double amountInBaht,
             String customerEmail) throws StripeException {
 
@@ -168,15 +156,17 @@ public class StripeService {
      *
      * frontend จะเอา client_secret ไปสร้างช่องกรอกบัตรของ Stripe
      * แล้วเรียก stripe.confirmPayment() เอง — เลขบัตรไม่ผ่าน server เรา
+     *
+     * @param amountInBaht ยอดที่ server คำนวณเอง (ตะกร้าออนไลน์ หรือบิลหน้าร้าน) — ห้ามรับจาก client
      */
     public CardIntent createCardIntent(OrderEntity order,
-            PricingService.PricedCart cart,
+            double amountInBaht,
             String customerEmail) throws StripeException {
 
         requireEnabled();
 
         PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
-                .setAmount(toMinorUnit(cart.total()))
+                .setAmount(toMinorUnit(amountInBaht))
                 .setCurrency(currency)
                 .addPaymentMethodType(METHOD_CARD)
                 .setReceiptEmail(customerEmail)
@@ -188,7 +178,7 @@ public class StripeService {
         PaymentIntent intent = client.v1().paymentIntents().create(params);
 
         log.info("สร้าง Card intent สำหรับ order {} ยอด {} {} (pi={})",
-                order.getId(), cart.total(), currency.toUpperCase(), intent.getId());
+                order.getId(), amountInBaht, currency.toUpperCase(), intent.getId());
 
         return new CardIntent(intent.getId(), intent.getClientSecret());
     }
